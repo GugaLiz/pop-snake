@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>箭蛇冲刺 - 最终修复版</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #121212;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #1a1a1a;
+            border: 2px solid #444;
+            box-shadow: 0 0 20px rgba(0, 255, 100, 0.1);
+            margin-top: 10px;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            text-align: center;
+            pointer-events: none; /* 让点击穿透到下层（如果需要） */
+            z-index: 10;
+        }
+        h1 { margin: 0; font-size: 24px; text-shadow: 0 0 10px #0f0; }
+        #score-board { margin-top: 5px; color: #0f0; font-weight: bold; }
+        
+        /* 开始/结束 弹窗 */
+        #modal {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border: 2px solid #0f0;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 0 30px #0f0;
+            display: none; /* 默认隐藏 */
+            z-index: 20;
+        }
+        button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 15px;
+            border-radius: 5px;
+        }
+        button:hover { background: #fff; }
+    </style>
+</head>
+<body>
+
+    <!-- UI 显示层 -->
+    <div id="ui-layer">
+        <h1 id="level-title">准备开始</h1>
+        <div id="score-board">分数: 0 | 目标: 0</div>
+    </div>
+
+    <!-- 游戏画布 -->
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+    <!-- 弹窗 (开始/结束/通关) -->
+    <div id="modal">
+        <h2 id="modal-title">箭蛇冲刺</h2>
+        <p id="modal-msg">方向键移动，空格射击</p>
+        <button onclick="startGame()">开始游戏</button>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const modal = document.getElementById('modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalMsg = document.getElementById('modal-msg');
+    const levelTitle = document.getElementById('level-title');
+    const scoreBoard = document.getElementById('score-board');
+
+    // 游戏配置
+    const COLS = 10;
+    const ROWS = 15;
+    const BLOCK_SIZE = 40;
+    
+    let gameInterval;
+    let currentLevel = 1;
+    let score = 0;
+    let targetScore = 0;
+    let snake = [];
+    let grid = []; // 0:空, 1:绿块(上), 2:绿块(下), 3:绿块(左), 4:绿块(右)
+    let direction = 'right'; // 初始方向
+    let nextDirection = 'right';
+    let isGameRunning = false;
+    let isDancing = false; // 是否正在跳舞
+
+    // 关卡设计 (0=空, 1=上, 2=下, 3=左, 4=右, 9=墙)
+    // 我们手动设计3个关卡的地图数据
+    const levels = [
+        // 第一关：新手训练 (宽敞的环形)
+        [
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,1,1,1,1,1,1,1,0,0],
+            [0,3,0,0,0,0,0,4,0,0],
+            [0,3,0,1,1,1,0,4,0,0],
+            [0,3,0,3,0,4,0,4,0,0],
+            [0,3,0,3,0,4,0,4,0,0],
+            [0,3,0,1,1,1,0,4,0,0],
+            [0,3,0,0,0,0,0,4,0,0],
+            [0,1,1,1,1,1,1,1,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0]
+        ],
+        // 第二关：进阶 (增加障碍)
+        [
+            [9,9,9,9,9,9,9,9,9,9],
+            [9,1,1,0,0,0,0,2,2,9],
+            [9,3,0,0,1,1,0,0,4,9],
+            [9,3,0,0,3,4,0,0,4,9],
+            [9,1,1,0,0,0,0,2,2,9],
+            [9,0,0,0,0,0,0,0,0,9],
+            [9,2,2,0,4,4,0,1,1,9],
+            [9,4,0,0,3,3,0,0,3,9],
+            [9,4,0,0,0,0,0,0,3,9],
+            [9,2,2,1,1,2,2,2,2,9],
+            [9,9,9,9,9,9,9,9,9,9],
+            [9,0,0,0,0,0,0,0,9,9],
+            [9,0,0,0,0,0,0,0,9,9],
+            [9,0,0,0,0,0,0,0,9,9],
+            [9,9,9,9,9,9,9,9,9,9]
+        ],
+        // 第三关：迷宫 (复杂)
+        [
+            [9,9,9,9,9,9,9,9,9,9],
+            [9,1,2,1,2,1,2,1,2,9],
+            [9,3,9,9,9,9,9,9,4,9],
+            [9,3,9,1,1,1,1,9,4,9],
+            [9,3,9,3,0,0,4,9,4,9],
+            [9,3,9,3,0,0,4,9,4,9],
+            [9,3,9,1,1,1,1,9,4,9],
+            [9,3,9,9,9,9,9,9,4,9],
+            [9,1,2,1,2,1,2,1,2,9],
+            [9,9,9,9,9,9,9,9,9,9],
+            [9,0,0,0,0,0,0,0,0,9],
+            [9,0,1,1,1,1,1,1,0,9],
+            [9,0,0,0,0,0,0,0,0,9],
+            [9,9,9,9,9,9,9,9,9,9],
+            [9,9,9,9,9,9,9,9,9,9]
+        ]
+    ];
+
+    // 显示模态框
+    function showModal(title, msg, showBtn = true) {
+        modalTitle.innerText = title;
+        modalMsg.innerText = msg;
+        modal.style.display = 'block';
+        if (!showBtn) {
+            modal.querySelector('button').style.display = 'none';
+        } else {
+            modal.querySelector('button').style.display = 'inline-block';
+            modal.querySelector('button').innerText = (title === "游戏结束") ? "重新开始" : "下一关";
+        }
+    }
+
+    function hideModal() {
+        modal.style.display = 'none';
+    }
+
+    // 初始化游戏
+    function startGame() {
+        // 如果是重新开始
+        if (currentLevel === 0 || !isGameRunning) {
+            currentLevel = 1;
+        }
+        
+        loadLevel(currentLevel);
+        hideModal();
+        isGameRunning = true;
+        isDancing = false;
+        direction = 'right';
+        nextDirection = 'right';
+        
+        // 清除旧循环
+        if (gameInterval) clearInterval(gameInterval);
+        gameLoop();
+    }
+
+    function loadLevel(lvl) {
+        // 重置数据
+        score = 0;
+        grid = JSON.parse(JSON.stringify(levels[lvl-1])); // 深拷贝地图
+        snake = [];
+        
+        // 寻找空地生成蛇
+        let emptySpots = [];
+        for(let r=0; r<ROWS; r++) {
+            for(let c=0; c<COLS; c++) {
+                if(grid[r][c] === 0) {
+                    emptySpots.push({r, c});
+                }
+            }
+        }
+
+        // 随机选一个空地放蛇头
+        if(emptySpots.length > 0) {
+            const start = emptySpots[Math.floor(Math.random() * emptySpots.length)];
+            snake = [{r: start.r, c: start.c}];
+        } else {
+            // 理论上不会发生，除非地图填满了
+            snake = [{r: 1, c: 1}];
+        }
+
+        // 计算目标分数 (地图上所有非0非9的块)
+        targetScore = 0;
+        for(let r=0; r<ROWS; r++) {
+            for(let c=0; c<COLS; c++) {
+                if(grid[r][c] > 0 && grid[r][c] < 9) targetScore++;
+            }
+        }
+
+        updateUI();
+    }
+
+    function updateUI() {
+        levelTitle.innerText = `第${currentLevel}关: ${currentLevel === 1 ? '新手训练' : (currentLevel === 2 ? '进阶迷宫' : '终极挑战')}`;
+        scoreBoard.innerText = `分数: ${score} | 目标: ${targetScore}`;
+    }
+
+    // 核心逻辑循环
+    function gameLoop() {
+        if (!isGameRunning) return;
+
+        // 1. 移动蛇
+        const head = {...snake[0]};
+        
+        // 如果是跳舞模式，蛇头随机乱动
+        if (isDancing) {
+            const dirs = ['up', 'down', 'left', 'right'];
+            nextDirection = dirs[Math.floor(Math.random() * 4)];
+        } else {
+            direction = nextDirection;
+        }
+
+        if (direction === 'up') head.r--;
+        else if (direction === 'down') head.r++;
+        else if (direction === 'left') head.c--;
+        else if (direction === 'right') head.c++;
+
+        // 2. 碰撞检测
+        // 边界
+        if (head.r < 0 || head.r >= ROWS || head.c < 0 || head.c >= COLS) {
+            gameOver();
+            return;
+        }
+
+        // 撞墙 (9) 或 撞自己
+        if (grid[head.r][head.c] === 9) {
+            gameOver();
+            return;
+        }
+
+        // 简单的撞自己检测 (如果不跳舞)
+        if (!isDancing) {
+            for(let part of snake) {
+                if(part.r === head.r && part.c === head.c) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
+
+        // 3. 处理方块
+        const cell = grid[head.r][head.c];
+        
+        // 如果撞到了方块 (1-8)，判断是否消除
+        // 1:上, 2:下, 3:左, 4:右
+        // 如果蛇的方向和箭头方向一致 -> 吃掉
+        // 如果不一致 -> 撞死 (除非按了空格射击，这里简化逻辑：不射击必死)
+        
+        let canMove = true;
+
+        if (cell > 0 && cell < 9) {
+            let hitDir = '';
+            if (cell === 1) hitDir = 'up';
+            else if (cell === 2) hitDir = 'down';
+            else if (cell === 3) hitDir = 'left';
+            else if (cell === 4) hitDir = 'right';
+
+            // 如果方向一致，吃掉
+            if (hitDir === direction) {
+                grid[head.r][head.c] = 0; // 消除
+                snake.unshift(head); // 蛇变长
+                score++;
+                updateUI();
+                checkWin();
+            } else {
+                // 方向不一致，如果不射击，就死
+                // 为了简化操作，我们设定：只要撞不同向的箭头就是死（或者需要空格射击）
+                // 这里为了体验，设定为：撞不同向的直接死（经典玩法）
+                // 如果你想加射击，需要监听空格键设置一个 shoot 变量
+                gameOver();
+                return;
+            }
+        } else {
+            // 空地，正常移动
+            snake.unshift(head);
+            snake.pop();
+        }
+
+        draw();
+
+        // 控制速度
+        let speed = isDancing ? 200 : (currentLevel === 1 ? 300 : (currentLevel === 2 ? 200 : 100));
+        setTimeout(gameLoop, speed);
+    }
+
+    function checkWin() {
+        if (score >= targetScore) {
+            isGameRunning = false;
+            if (currentLevel < 3) {
+                showModal("关卡完成！", "准备进入下一关...", true);
+                // 修改按钮逻辑到下一关
+                const btn = modal.querySelector('button');
+                btn.onclick = () => {
+                    currentLevel++;
+                    startGame();
+                };
+            } else {
+                // 第三关通关，开始跳舞
+                isDancing = true;
+                isGameRunning = true;
+                levelTitle.innerText = "🎉 通关！蛇在跳舞！ 🎉";
+                // 跳舞模式下不需要目标分数了
+                gameLoop(); 
+            }
+        }
+    }
+
+    function gameOver() {
+        isGameRunning = false;
+        showModal("游戏结束", "撞到了障碍或自己！");
+    }
+
+    // 绘制
+    function draw() {
+        // 清屏
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 画网格线 (可选，增加复古感)
+        ctx.strokeStyle = '#222';
+        for(let i=0; i<=COLS; i++) {
+            ctx.beginPath(); ctx.moveTo(i*BLOCK_SIZE, 0); ctx.lineTo(i*BLOCK_SIZE, canvas.height); ctx.stroke();
+        }
+        for(let i=0; i<=ROWS; i++) {
+            ctx.beginPath(); ctx.moveTo(0, i*BLOCK_SIZE); ctx.lineTo(canvas.width, i*BLOCK_SIZE); ctx.stroke();
+        }
+
+        // 画地图
+        for(let r=0; r<ROWS; r++) {
+            for(let c=0; c<COLS; c++) {
+                const val = grid[r][c];
+                if (val === 9) {
+                    ctx.fillStyle = '#333'; // 墙壁
+                    ctx.fillRect(c*BLOCK_SIZE, r*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                } else if (val > 0) {
+                    // 箭头块
+                    ctx.fillStyle = '#0f0'; // 绿色
+                    if (isDancing) ctx.fillStyle = `hsl(${Math.random()*360}, 100%, 50%)`; // 跳舞变色
+
+                    ctx.fillRect(c*BLOCK_SIZE + 2, r*BLOCK_SIZE + 2, BLOCK_SIZE - 4, BLOCK_SIZE - 4);
+                    
+                    // 画箭头符号
+                    ctx.fillStyle = '#000';
+                    ctx.font = '20px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    let arrow = '';
+                    if(val===1) arrow='▲';
+                    if(val===2) arrow='▼';
+                    if(val===3) arrow='◀';
+                    if(val===4) arrow='▶';
+                    ctx.fillText(arrow, c*BLOCK_SIZE + BLOCK_SIZE/2, r*BLOCK_SIZE + BLOCK_SIZE/2);
+                }
+            }
+        }
+
+        // 画蛇
+        snake.forEach((part, index) => {
+            if (isDancing) {
+                ctx.fillStyle = `hsl(${Date.now()/10 % 360}, 100%, 50%)`;
+            } else {
+                ctx.fillStyle = index === 0 ? '#fff' : '#0f0'; // 头白身绿
+            }
+            ctx.fillRect(part.c*BLOCK_SIZE, part.r*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            
+            // 蛇头眼睛
+            if(index === 0) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(part.c*BLOCK_SIZE + 10, part.r*BLOCK_SIZE + 10, 5, 5);
+                ctx.fillRect(part.c*BLOCK_SIZE + 25, part.r*BLOCK_SIZE + 10, 5, 5);
+            }
+        });
+    }
+
+    // 键盘控制
+    document.addEventListener('keydown', e => {
+        if (!isGameRunning) return;
+
+        switch(e.key) {
+            case 'ArrowUp': if (direction !== 'down') nextDirection = 'up'; break;
+            case 'ArrowDown': if (direction !== 'up') nextDirection = 'down'; break;
+            case 'ArrowLeft': if (direction !== 'right') nextDirection = 'left'; break;
+            case 'ArrowRight': if (direction !== 'left') nextDirection = 'right'; break;
+            case ' ': 
+                // 空格射击逻辑 (如果有需要可以扩展)
+                break;
+        }
+    });
+
+    // 初始显示开始弹窗
+    showModal("箭蛇冲刺", "方向键移动，吃到同向箭头\n第一关很慢，请放心游玩");
+
+</script>
+</body>
+</html>

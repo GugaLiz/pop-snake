@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>变色贪吃蛇 - 跳舞测试版</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #111;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.2);
+        }
+        canvas {
+            background-color: #1a1a1a;
+            border: 2px solid #333;
+            display: block;
+        }
+        #start-btn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 10px 20px;
+            font-size: 18px;
+            background-color: #0f0;
+            color: #000;
+            border: none;
+            cursor: pointer;
+            z-index: 10;
+            font-weight: bold;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            text-align: center;
+            pointer-events: none;
+            z-index: 5;
+            text-shadow: 1px 1px 2px black;
+        }
+        #level-title { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+        #score-board { color: #0f0; font-size: 18px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ui-layer">
+            <div id="level-title">第一关：新手训练</div>
+            <div id="score-board">分数: 0 | 目标: 10</div>
+        </div>
+        <button id="start-btn">开始游戏</button>
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('start-btn');
+    const levelTitle = document.getElementById('level-title');
+    const scoreBoard = document.getElementById('score-board');
+
+    // 游戏配置
+    const GRID_SIZE = 20;
+    const TILE_COUNT_X = canvas.width / GRID_SIZE;
+    const TILE_COUNT_Y = canvas.height / GRID_SIZE;
+
+    let snake = [];
+    let food = { x: 0, y: 0 };
+    let dx = 0;
+    let dy = 0;
+    let score = 0;
+    let gameInterval;
+    let isGameRunning = false;
+    let isCelebrating = false;
+    let celebrationTimer = 0;
+
+    // 颜色配置
+    const COLORS = {
+        UP: '#FFD700',    // 金
+        DOWN: '#1E90FF',  // 蓝
+        LEFT: '#FF4500',  // 橙红
+        RIGHT: '#32CD32', // 绿
+        BODY: '#FFFFFF'   // 身体默认白
+    };
+
+    // 关卡数据
+    const levels = [
+        { target: 10, speed: 200, title: "第一关：新手训练" }
+    ];
+    let currentLevelIdx = 0;
+
+    // --- 核心逻辑 ---
+
+    // 初始化/重置游戏
+    function initGame() {
+        // 蛇初始在中心
+        snake = [{ x: Math.floor(TILE_COUNT_X / 2), y: Math.floor(TILE_COUNT_Y / 2) }];
+        dx = 0;
+        dy = 0; // 初始静止
+        score = 0;
+        isCelebrating = false;
+        celebrationTimer = 0;
+        updateUI();
+        placeFood();
+    }
+
+    function updateUI() {
+        const levelData = levels[currentLevelIdx];
+        levelTitle.innerText = levelData.title;
+        scoreBoard.innerText = `分数: ${score} | 目标: ${levelData.target}`;
+    }
+
+    // 随机放置食物，确保不在蛇身上
+    function placeFood() {
+        let valid = false;
+        while (!valid) {
+            food.x = Math.floor(Math.random() * TILE_COUNT_X);
+            food.y = Math.floor(Math.random() * TILE_COUNT_Y);
+
+            valid = true;
+            // 检查是否生成在蛇身上
+            for (let part of snake) {
+                if (part.x === food.x && part.y === food.y) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    function gameLoop() {
+        if (isCelebrating) {
+            drawCelebration();
+            return;
+        }
+
+        // 如果还没按键，只绘制不移动
+        if (dx === 0 && dy === 0) {
+            draw();
+            return;
+        }
+
+        // 移动逻辑
+        const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+
+        // 碰撞检测（墙壁）
+        if (head.x < 0 || head.x >= TILE_COUNT_X || head.y < 0 || head.y >= TILE_COUNT_Y) {
+            gameOver();
+            return;
+        }
+
+        // 碰撞检测（自己）
+        for (let part of snake) {
+            if (head.x === part.x && head.y === part.y) {
+                gameOver();
+                return;
+            }
+        }
+
+        snake.unshift(head); // 加头
+
+        // 吃食物
+        if (head.x === food.x && head.y === food.y) {
+            score++;
+            updateUI();
+            placeFood();
+            // 检查通关
+            if (score >= levels[currentLevelIdx].target) {
+                startCelebration();
+            }
+        } else {
+            snake.pop(); // 去尾
+        }
+
+        draw();
+    }
+
+    function draw() {
+        // 清空画布
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 画食物
+        ctx.fillStyle = '#FF0000';
+        ctx.fillRect(food.x * GRID_SIZE, food.y * GRID_SIZE, GRID_SIZE - 2, GRID_SIZE - 2);
+
+        // 画蛇
+        snake.forEach((part, index) => {
+            // 头部根据方向变色，身体白色
+            if (index === 0) {
+                if (dx === 1) ctx.fillStyle = COLORS.RIGHT;
+                else if (dx === -1) ctx.fillStyle = COLORS.LEFT;
+                else if (dy === 1) ctx.fillStyle = COLORS.DOWN;
+                else if (dy === -1) ctx.fillStyle = COLORS.UP;
+                else ctx.fillStyle = COLORS.BODY; // 静止时
+            } else {
+                ctx.fillStyle = COLORS.BODY;
+            }
+            ctx.fillRect(part.x * GRID_SIZE, part.y * GRID_SIZE, GRID_SIZE - 2, GRID_SIZE - 2);
+        });
+    }
+
+    // --- 庆祝/跳舞逻辑 ---
+    function startCelebration() {
+        isCelebrating = true;
+        celebrationTimer = 10000; // 10秒跳舞时间
+        // 停止原本的移动循环，改用高频刷新来跳舞
+        clearInterval(gameInterval);
+        gameInterval = setInterval(gameLoop, 100); // 100ms刷新一次动画
+    }
+
+    function drawCelebration() {
+        celebrationTimer -= 100;
+        if (celebrationTimer <= 0) {
+            alert("恭喜通关！测试结束。");
+            location.reload(); // 刷新页面
+            return;
+        }
+
+        // 跳舞逻辑：蛇身随机扭动 + 变色
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 简单的扭动算法：每节身体在原地随机微移或变色
+        snake.forEach((part, index) => {
+            // 随机颜色
+            const colors = [COLORS.UP, COLORS.DOWN, COLORS.LEFT, COLORS.RIGHT, '#FFF', '#F0F'];
+            ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+
+            // 随机位移 (在格子内抖动)
+            const jitter = 4;
+            const offsetX = (Math.random() - 0.5) * jitter;
+            const offsetY = (Math.random() - 0.5) * jitter;
+
+            ctx.fillRect(
+                part.x * GRID_SIZE + offsetX,
+                part.y * GRID_SIZE + offsetY,
+                GRID_SIZE - 2,
+                GRID_SIZE - 2
+            );
+        });
+    }
+
+    function gameOver() {
+        clearInterval(gameInterval);
+        alert("游戏结束！撞墙了！");
+        location.reload();
+    }
+
+    // --- 输入控制 ---
+    document.addEventListener('keydown', e => {
+        if (!isGameRunning) return;
+
+        switch(e.key) {
+            case 'ArrowUp':
+                if (dy !== 1) { dx = 0; dy = -1; }
+                break;
+            case 'ArrowDown':
+                if (dy !== -1) { dx = 0; dy = 1; }
+                break;
+            case 'ArrowLeft':
+                if (dx !== 1) { dx = -1; dy = 0; }
+                break;
+            case 'ArrowRight':
+                if (dx !== -1) { dx = 1; dy = 0; }
+                break;
+        }
+    });
+
+    // --- 按钮绑定 ---
+    startBtn.addEventListener('click', () => {
+        if (isGameRunning) return;
+
+        isGameRunning = true;
+        startBtn.style.display = 'none'; // 隐藏按钮
+        initGame();
+        draw(); // 绘制初始帧
+
+        // 启动循环 (150ms 速度适中)
+        gameInterval = setInterval(gameLoop, 150);
+    });
+
+</script>
+
+</body>
+</html>

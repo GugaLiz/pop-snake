@@ -1,18 +1,22 @@
 ﻿export const GAME_CONFIG = {
-  boardSize: 16,
+  boardColumns: 34,
+  boardRows: 24,
   initialLength: 3,
-  targetFoodCount: 24,
+  targetFoodCount: 28,
   eliminateThreshold: 3,
-  moveIntervalMs: 165,
+  moveIntervalMs: 145,
   comboWindowMs: 2000,
   scorePerFood: 10,
   scorePerSegment: 50,
-  comboBonusBase: 5,
+  comboBonusBase: 90,
   comboBonusGrowth: 2,
   cellGap: 4,
   specialSpawnChance: 0.1,
   slowDurationMs: 5000,
   bombRemoveCount: 3,
+  sprintBaseSeconds: 90,
+  sprintBonusSecondsPerEliminate: 2,
+  upgradeTriggerEvery: 2,
 } as const;
 
 export const GAME_COLORS = [
@@ -28,7 +32,7 @@ export const BASIC_COLOR_IDS = ['sun', 'leaf', 'mint', 'berry'] as const;
 export type SnakeColor = (typeof GAME_COLORS)[number]['id'];
 export type BasicSnakeColor = (typeof BASIC_COLOR_IDS)[number];
 export type FoodType = 'normal' | 'bomb' | 'rainbow' | 'slow';
-export type GameModeId = 'standard' | 'endless' | 'timed' | 'steps' | 'precision';
+export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush';
 
 export type GameModeConfig = {
   id: GameModeId;
@@ -42,6 +46,18 @@ export type GameModeConfig = {
 };
 
 export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
+  sprint: {
+    id: 'sprint',
+    name: '冲刺模式',
+    description: '90 秒冲分，三消返时并获得局内强化。',
+    timeLimitSeconds: GAME_CONFIG.sprintBaseSeconds,
+  },
+  daily: {
+    id: 'daily',
+    name: '每日挑战',
+    description: '每天一套固定规则和任务，试试今天能冲多高。',
+    timeLimitSeconds: 75,
+  },
   standard: {
     id: 'standard',
     name: '标准模式',
@@ -74,6 +90,18 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
     description: '80 步结束时蛇长刚好达到目标值。',
     stepLimit: 80,
     targetLength: 9,
+  },
+  puzzle: {
+    id: 'puzzle',
+    name: '箭蛇解谜',
+    description: '方向匹配、读图规划、逐关推进。',
+  },
+  rush: {
+    id: 'rush',
+    name: '箭蛇冲刺',
+    description: '45 秒冲刺开路，主动技能直线清障。',
+    timeLimitSeconds: 45,
+    targetScore: 1200,
   },
 };
 

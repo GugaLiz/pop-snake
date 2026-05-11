@@ -1,18 +1,78 @@
-﻿import * as Phaser from 'phaser';
+﻿// @ts-nocheck
+import * as Phaser from 'phaser';
 import {
-  BASIC_COLOR_IDS,
   GAME_CONFIG,
   GAME_MODES,
   getColorFill,
-  getRandomBasicColor,
   type BasicSnakeColor,
   type FoodType,
   type GameModeConfig,
   type GameModeId,
   type SnakeColor,
 } from '../../config/gameConfig';
-import { getBestCombo, getBestScore, getBestSurvivalSeconds, saveResult } from '../../storage/localStorage';
-import { DIRECTIONS, isOpposite, samePoint, type Direction, type Food, type GameEvent, type GameResult, type GameSnapshot, type Segment } from '../types';
+import {
+  getBestCombo,
+  getBestScore,
+  getBestSurvivalSeconds,
+  saveDailyChallengeStatus,
+  saveResult,
+  unlockSticker,
+} from '../../storage/localStorage';
+import {
+  DIRECTIONS,
+  isOpposite,
+  samePoint,
+  type Direction,
+  type Food,
+  type GameEvent,
+  type GameResult,
+  type GameSnapshot,
+  type MissionId,
+  type MissionState,
+  type Point,
+  type Segment,
+  type UpgradeChoice,
+  type UpgradeId,
+} from '../types';
+import {
+  createMissionStates as createMissionStatesFromSystem,
+  getMissionDefinition,
+  getMissionProgress as getMissionProgressFromSystem,
+  type MissionDefinition,
+} from '../systems/missions';
+import {
+  applyUpgradeEffect,
+  createDefaultModifiers as createDefaultUpgradeModifiers,
+  pickUpgradeChoices as pickUpgradeChoicesFromSystem,
+  type UpgradeModifierState,
+} from '../systems/upgrades';
+import {
+  createDailyChallenge,
+  getDateKey,
+  type DailyChallengeConfig,
+} from '../systems/daily';
+import {
+  createFoodCandidate,
+  refillFoodsToTarget,
+  isCellFree as isCellFreeFromSystem,
+  getTailTargetColor as getTailTargetColorFromSystem,
+  regenerateTail as regenerateTailFromSystem,
+  pickFoodType as pickFoodTypeFromSystem,
+  pickNextFoodColor as pickNextFoodColorFromSystem,
+} from '../systems/food';
+import {
+  calculateBoardLayout,
+  isPointOutOfBounds,
+  wrapBoardPoint,
+} from '../core/board';
+import {
+  advanceSnake,
+  getNextHeadPoint,
+  resolveQueuedDirection,
+} from '../core/snake';
+import { PUZZLE_LEVELS, type PuzzleLevel } from '../puzzle/puzzleLevels';
+import { isPuzzleWall } from '../puzzle/puzzleRules';
+import { clearRushLine, generateRushObstacleClusters } from '../rush/obstacles';
 
 type GameCallbacks = {
   onSnapshot?: (snapshot: GameSnapshot) => void;
@@ -24,15 +84,15 @@ type EffectSettings = {
   screenShakeEnabled: boolean;
 };
 
+
 export class MainScene extends Phaser.Scene {
   private callbacks: GameCallbacks = {};
   private effectSettings: EffectSettings = { screenShakeEnabled: true };
-  private mode: GameModeConfig = GAME_MODES.standard;
+  private mode: GameModeConfig = GAME_MODES.sprint;
   private snake: Segment[] = [];
   private foods: Food[] = [];
   private direction: Direction = 'right';
   private nextDirection: Direction = 'right';
-  private directionQueue: Direction[] = [];
   private score = 0;
   private combo = 0;
   private maxCombo = 0;
@@ -44,17 +104,37 @@ export class MainScene extends Phaser.Scene {
   private startAt = 0;
   private pausedDuration = 0;
   private pausedAt = 0;
+  private resumeUntil = 0;
   private slowUntil = 0;
   private status: GameSnapshot['status'] = 'ready';
   private accumulator = 0;
   private cellSize = 44;
   private boardOrigin = { x: 0, y: 0 };
   private isSceneReady = false;
+  private inputLocked = false;
   private graphics?: Phaser.GameObjects.Graphics;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private keys?: Record<string, Phaser.Input.Keyboard.Key>;
   private touchStart?: Phaser.Math.Vector2;
   private tailPulseUntil = 0;
+  private sprintBonusMs = 0;
+  private successfulEliminations = 0;
+  private missionStates: MissionState[] = [];
+  private selectedUpgrades: UpgradeChoice[] = [];
+  private upgradeChoices: UpgradeChoice[] = [];
+  private modifiers: UpgradeModifierState = this.createDefaultModifiers();
+  private randomState = 1;
+  private dailyChallenge?: DailyChallengeConfig;
+  private puzzleLevelIndex = 0;
+  private puzzleWalls: Point[] = [];
+  private puzzleTip?: string;
+  private puzzleTargetsCleared = 0;
+  private rushObstacles: Point[] = [];
+  private rushClearedObstacles = 0;
+  private rushSkillCooldownUntil = 0;
+  private rushSkillUses = 0;
+  private comboRewardText?: string;
+  private comboRewardUntil = 0;
 
   constructor() {
     super('MainScene');
@@ -68,10 +148,32 @@ export class MainScene extends Phaser.Scene {
     this.effectSettings = settings;
   }
 
+  public setInputLocked(locked: boolean): void {
+    this.inputLocked = locked;
+  }
+
   public setMode(modeId: GameModeId): void {
+    if (modeId !== this.mode.id && modeId !== 'puzzle') {
+      this.puzzleLevelIndex = 0;
+    }
     this.mode = GAME_MODES[modeId];
     if (!this.isSceneReady) return;
     this.resetGame();
+  }
+
+  public chooseUpgrade(index: number): void {
+    if (this.status !== 'upgrade') return;
+    const choice = this.upgradeChoices[index];
+    if (!choice) return;
+
+    this.selectedUpgrades = [...this.selectedUpgrades, choice];
+    this.applyUpgrade(choice.id);
+    this.upgradeChoices = [];
+    this.status = 'resume';
+    this.resumeUntil = this.time.now + 3000;
+    this.callbacks.onEvent?.({ type: 'upgrade' });
+    this.showFloatingText(choice.title, 0xfff06a);
+    this.publishSnapshot();
   }
 
   init(data: GameCallbacks): void {
@@ -82,6 +184,10 @@ export class MainScene extends Phaser.Scene {
     this.graphics = this.add.graphics();
     this.cursors = this.input.keyboard?.createCursorKeys();
     this.keys = this.input.keyboard?.addKeys('W,A,S,D,SPACE') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.input.keyboard?.on('keydown', this.handleKeyDown, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown', this.handleKeyDown, this);
+    });
     this.scale.on('resize', this.handleResize, this);
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.on('pointerup', this.handlePointerUp, this);
@@ -91,20 +197,32 @@ export class MainScene extends Phaser.Scene {
   }
 
   update(_: number, delta: number): void {
-    this.handleKeyboardInput();
+    if (this.status === 'resume') {
+      this.publishSnapshot();
+      if (this.time.now >= this.resumeUntil) {
+        this.status = 'playing';
+        this.pausedDuration += this.time.now - this.pausedAt;
+        this.pausedAt = 0;
+        this.resumeUntil = 0;
+        this.publishSnapshot();
+      }
+      return;
+    }
     if (this.status !== 'playing') return;
 
     this.checkModeEndConditions();
     if (this.status !== 'playing') return;
 
     this.accumulator += delta;
-    if (this.accumulator >= this.getMoveInterval()) {
-      this.accumulator = 0;
+    const interval = this.getMoveInterval();
+    while (this.accumulator >= interval && this.status === 'playing') {
+      this.accumulator -= interval;
       this.step();
     }
   }
 
   public startGame(): void {
+    if (this.inputLocked) return;
     if (this.status !== 'ready') return;
     this.status = 'playing';
     this.startAt = this.time.now;
@@ -113,16 +231,65 @@ export class MainScene extends Phaser.Scene {
   }
 
   public setDirection(direction: Direction): void {
+    if (this.inputLocked) return;
     if (this.status === 'ready') this.startGame();
-    const lastQueued = this.directionQueue[this.directionQueue.length - 1] ?? this.nextDirection;
-    if (direction === lastQueued || isOpposite(lastQueued, direction)) return;
-
-    this.directionQueue = [...this.directionQueue, direction].slice(-2);
+    if (this.status === 'upgrade') return;
+    if (this.status === 'resume') {
+      this.status = 'playing';
+      this.pausedDuration += this.time.now - this.pausedAt;
+      this.pausedAt = 0;
+      this.resumeUntil = 0;
+      this.publishSnapshot();
+    }
+    if (direction === this.nextDirection || isOpposite(this.direction, direction)) return;
     this.nextDirection = direction;
   }
 
+  public activateSkill(): void {
+    if (this.inputLocked) return;
+    if (this.mode.id !== 'rush') return;
+    if (this.status === 'ready') this.startGame();
+    if (this.status !== 'playing') return;
+
+    const remainingMs = this.rushSkillCooldownUntil - this.time.now;
+    if (remainingMs > 0) {
+      this.showFloatingText(`?? ${Math.ceil(remainingMs / 1000)}s`, 0x8ee7ff);
+      this.publishSnapshot();
+      return;
+    }
+
+    const head = this.snake[0];
+    const { cleared, beamEnd } = clearRushLine({
+      origin: head,
+      direction: this.direction,
+      obstacles: this.rushObstacles,
+      columns: GAME_CONFIG.boardColumns,
+      rows: GAME_CONFIG.boardRows,
+    });
+
+    if (cleared.length > 0) {
+      this.rushObstacles = this.rushObstacles.filter(
+        (obstacle) => !cleared.some((point) => samePoint(point, obstacle)),
+      );
+      this.rushClearedObstacles += cleared.length;
+      this.rushSkillUses += 1;
+      this.score += cleared.length * 30;
+      this.spawnRushBeam(head, beamEnd, cleared.length);
+      this.showFloatingText(`开路 +${cleared.length}`, 0xfff06a);
+      if (this.effectSettings.screenShakeEnabled) this.cameras.main.shake(90, 0.003);
+      this.rushSkillCooldownUntil = this.time.now + 2600;
+      this.refillRushObstacles(26);
+    } else {
+      this.showFloatingText('前方畅通', 0xffffff);
+    }
+
+    this.draw();
+    this.publishSnapshot();
+  }
+
   public togglePause(): void {
-    if (this.status === 'gameover' || this.status === 'ready') return;
+    if (this.inputLocked) return;
+    if (this.status === 'gameover' || this.status === 'ready' || this.status === 'upgrade' || this.status === 'resume') return;
     if (this.status === 'paused') {
       this.status = 'playing';
       this.pausedDuration += this.time.now - this.pausedAt;
@@ -134,20 +301,76 @@ export class MainScene extends Phaser.Scene {
   }
 
   public restart(): void {
+    if (this.mode.id === 'puzzle' && this.status === 'gameover' && this.objectiveCompleted) {
+      this.puzzleLevelIndex =
+        this.puzzleLevelIndex >= PUZZLE_LEVELS.length - 1
+          ? 0
+          : this.puzzleLevelIndex + 1;
+    }
     this.resetGame();
   }
 
+  public replayPuzzleLevel(): void {
+    if (this.mode.id !== 'puzzle') return;
+    this.resetGame();
+  }
+
+  public nextPuzzleLevel(): void {
+    if (this.mode.id !== 'puzzle') return;
+    this.puzzleLevelIndex =
+      this.puzzleLevelIndex >= PUZZLE_LEVELS.length - 1
+        ? 0
+        : this.puzzleLevelIndex + 1;
+    this.resetGame();
+  }
+
+  private createDefaultModifiers(): UpgradeModifierState {
+    return createDefaultUpgradeModifiers();
+  }
+
+  private getDateKey(): string {
+    return getDateKey();
+  }
+
+  private hashSeed(source: string): number {
+    let hash = 2166136261;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return Math.abs(hash >>> 0) || 1;
+  }
+
+  private setRandomSeed(seed: number): void {
+    this.randomState = seed || 1;
+  }
+
+  private nextRandom(): number {
+    this.randomState = (Math.imul(this.randomState, 1664525) + 1013904223) >>> 0;
+    return this.randomState / 4294967296;
+  }
+
+  private randomInt(min: number, max: number): number {
+    return Math.floor(this.nextRandom() * (max - min + 1)) + min;
+  }
+
+
   private resetGame(): void {
-    const mid = Math.floor(GAME_CONFIG.boardSize / 2);
+    this.dailyChallenge =
+      this.mode.id === 'daily'
+        ? createDailyChallenge(this.getDateKey(), (source) => this.hashSeed(source))
+        : undefined;
+    this.setRandomSeed(this.hashSeed(`${this.mode.id}-${this.dailyChallenge?.key ?? Date.now().toString()}`));
+    const midX = Math.floor(GAME_CONFIG.boardColumns / 2);
+    const midY = Math.floor(GAME_CONFIG.boardRows / 2);
     this.snake = [
-      { x: mid + 1, y: mid, color: 'leaf' },
-      { x: mid, y: mid, color: 'mint' },
-      { x: mid - 1, y: mid, color: 'sun' },
+      { x: midX + 1, y: midY, color: 'leaf' },
+      { x: midX, y: midY, color: 'mint' },
+      { x: midX - 1, y: midY, color: 'sun' },
     ];
     this.foods = [];
     this.direction = 'right';
     this.nextDirection = 'right';
-    this.directionQueue = [];
     this.score = 0;
     this.combo = 0;
     this.maxCombo = 0;
@@ -162,21 +385,157 @@ export class MainScene extends Phaser.Scene {
     this.slowUntil = 0;
     this.status = 'ready';
     this.accumulator = 0;
-    this.refillFoods();
+    this.sprintBonusMs = 0;
+    this.successfulEliminations = 0;
+    this.resumeUntil = 0;
+    this.puzzleTargetsCleared = 0;
+    this.puzzleWalls = [];
+    this.puzzleTip = undefined;
+    this.rushObstacles = [];
+    this.rushClearedObstacles = 0;
+    this.rushSkillCooldownUntil = 0;
+    this.rushSkillUses = 0;
+    this.comboRewardText = undefined;
+    this.comboRewardUntil = 0;
+    this.modifiers = this.createDefaultModifiers();
+    if (this.dailyChallenge) {
+      this.modifiers = { ...this.modifiers, ...this.dailyChallenge.modifiers };
+    }
+    this.selectedUpgrades = [];
+    this.upgradeChoices = [];
+    if (this.mode.id === 'puzzle') {
+      this.setupPuzzleLevel();
+    } else if (this.mode.id === 'rush') {
+      this.setupRushMode();
+    } else {
+      this.missionStates = this.createMissionStates();
+      this.refillFoods();
+    }
     this.draw();
     this.publishSnapshot();
+  }
+
+  private setupPuzzleLevel(): void {
+    const level = this.getPuzzleLevel();
+    this.direction = level.start.direction;
+    this.nextDirection = level.start.direction;
+    this.snake = this.createPuzzleSnake(level);
+    this.foods = level.targets.map((target, index) => ({
+      x: target.x,
+      y: target.y,
+      color: this.getPuzzleTargetColor(index),
+      type: 'normal' as const,
+      requiredDirection: target.direction,
+      isPuzzleTarget: true,
+    }));
+    this.puzzleWalls = level.walls;
+    this.puzzleTip = level.tip;
+    this.missionStates = [];
+  }
+
+  private setupRushMode(): void {
+    this.missionStates = [];
+    this.selectedUpgrades = [];
+    this.upgradeChoices = [];
+    this.refillFoods();
+    this.spawnRushObstacles(30);
+  }
+
+  private spawnRushObstacles(count: number): void {
+    this.rushObstacles = [
+      ...this.rushObstacles,
+      ...generateRushObstacleClusters({
+        count,
+        columns: GAME_CONFIG.boardColumns,
+        rows: GAME_CONFIG.boardRows,
+        snakeHead: this.snake[0],
+        snakeBody: this.snake,
+        foods: this.foods,
+        existing: this.rushObstacles,
+        nextRandom: () => this.nextRandom(),
+        randomInt: (min, max) => this.randomInt(min, max),
+      }),
+    ];
+  }
+
+  private refillRushObstacles(targetCount: number): void {
+    if (this.mode.id !== 'rush') return;
+    const missing = Math.max(0, targetCount - this.rushObstacles.length);
+    if (missing > 0) this.spawnRushObstacles(missing);
+  }
+
+  private spawnRushBeam(from: Point, to: Point, clearedCount: number): void {
+    const start = this.cellCenter(from.x, from.y);
+    const clampedEnd = {
+      x: Phaser.Math.Clamp(to.x, 0, GAME_CONFIG.boardColumns - 1),
+      y: Phaser.Math.Clamp(to.y, 0, GAME_CONFIG.boardRows - 1),
+    };
+    const end = this.cellCenter(clampedEnd.x, clampedEnd.y);
+    const beam = this.add.graphics();
+    beam.lineStyle(Math.max(8, this.cellSize * 0.28), 0xfff3a6, 0.92);
+    beam.lineBetween(start.x, start.y, end.x, end.y);
+    beam.lineStyle(Math.max(3, this.cellSize * 0.11), 0xffffff, 1);
+    beam.lineBetween(start.x, start.y, end.x, end.y);
+
+    const flash = this.add.text((start.x + end.x) / 2, (start.y + end.y) / 2, `+${clearedCount}`, {
+      fontFamily: 'Trebuchet MS, Microsoft YaHei, sans-serif',
+      fontSize: `${Math.max(18, Math.floor(this.cellSize * 0.68))}px`,
+      fontStyle: 'bold',
+      color: '#fff3a6',
+      stroke: '#2d170d',
+      strokeThickness: 5,
+    });
+    flash.setOrigin(0.5);
+
+    this.tweens.add({
+      targets: beam,
+      alpha: 0,
+      duration: 170,
+      ease: 'Quad.easeOut',
+      onComplete: () => beam.destroy(),
+    });
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      y: flash.y - this.cellSize * 0.55,
+      scale: 1.15,
+      duration: 280,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  private getPuzzleLevel(): PuzzleLevel {
+    return PUZZLE_LEVELS[this.puzzleLevelIndex] ?? PUZZLE_LEVELS[0];
+  }
+
+  private createPuzzleSnake(level: PuzzleLevel): Segment[] {
+    const directionVector = DIRECTIONS[level.start.direction];
+    const snake: Segment[] = [];
+    const colors: SnakeColor[] = ['berry', 'sun', 'mint', 'leaf'];
+
+    for (let index = 0; index < 4; index += 1) {
+      snake.push({
+        x: level.start.x - directionVector.x * index,
+        y: level.start.y - directionVector.y * index,
+        color: colors[index % colors.length],
+      });
+    }
+
+    return snake;
+  }
+
+  private getPuzzleTargetColor(index: number): BasicSnakeColor {
+    const palette: BasicSnakeColor[] = ['sun', 'leaf', 'mint', 'berry'];
+    return palette[index % palette.length];
   }
 
   private step(): void {
     this.applyQueuedDirection();
     this.stepsUsed += 1;
 
-    const vector = DIRECTIONS[this.direction];
     const currentHead = this.snake[0];
-    const rawNextHead = {
-      x: currentHead.x + vector.x,
-      y: currentHead.y + vector.y,
-    };
+    const rawNextHead = getNextHeadPoint(currentHead, this.direction);
     const nextPoint = this.mode.id === 'endless' ? this.wrapPoint(rawNextHead) : rawNextHead;
     const nextHead: Segment = {
       x: nextPoint.x,
@@ -190,6 +549,25 @@ export class MainScene extends Phaser.Scene {
     const collisionBody = grows ? this.snake : this.snake.slice(0, -1);
 
     if ((this.mode.id !== 'endless' && this.isWallHit(nextHead)) || collisionBody.some((segment) => samePoint(segment, nextHead))) {
+      if (this.mode.id === 'puzzle') {
+        this.showFloatingText(this.isPuzzleWall(nextHead) ? '撞墙了' : '撞到自己', 0xff6f3c);
+      }
+      if (this.mode.id === 'rush') {
+        this.showFloatingText(
+          this.isRushObstacle(nextHead)
+            ? '撞上障碍'
+            : collisionBody.some((segment) => samePoint(segment, nextHead))
+              ? '撞到自己'
+              : '撞墙了',
+          0xff6f3c,
+        );
+      }
+      this.finishGame(false);
+      return;
+    }
+
+    if (this.mode.id === 'puzzle' && eatenFood?.requiredDirection && eatenFood.requiredDirection !== this.direction) {
+      this.showFloatingText('方向不对', 0xff4d5f);
       this.finishGame(false);
       return;
     }
@@ -200,11 +578,25 @@ export class MainScene extends Phaser.Scene {
     if (eatenFood) {
       this.foods.splice(foodIndex, 1);
       this.eaten += 1;
-      this.score += GAME_CONFIG.scorePerFood;
+      if (this.mode.id === 'puzzle') {
+        this.puzzleTargetsCleared += 1;
+      }
+      this.score += GAME_CONFIG.scorePerFood + this.modifiers.foodScoreBonus;
       this.callbacks.onEvent?.({ type: 'eat', color: eatenFood.color, foodType: eatenFood.type });
       this.applyFoodEffect(eatenFood, previousTail);
+      if (this.mode.id !== 'puzzle') {
+        this.updateMissionProgress({ foodType: eatenFood.type });
+      }
       this.spawnEatEffect(previousTail, eatenFood.type);
-      this.refillFoods();
+      if (this.mode.id === 'puzzle') {
+        this.showFloatingText(
+          `方向正确 ${this.puzzleTargetsCleared}/${this.getPuzzleLevel().targets.length}`,
+          0x8ddf5a,
+        );
+      } else {
+        this.refillFoods();
+        if (this.mode.id === 'rush') this.refillRushObstacles(30);
+      }
       this.checkModeEndConditions();
     }
 
@@ -213,21 +605,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   private moveSnake(nextHead: Segment): void {
-    this.snake = this.snake.map((segment, index) => {
-      if (index === 0) return { ...segment, x: nextHead.x, y: nextHead.y };
-      const previousSegment = this.snake[index - 1];
-      return { ...segment, x: previousSegment.x, y: previousSegment.y };
-    });
+    this.snake = advanceSnake(this.snake, nextHead);
   }
 
   private applyQueuedDirection(): void {
-    const queued = this.directionQueue.shift();
-    if (queued && !isOpposite(this.direction, queued)) {
-      this.direction = queued;
-    } else {
-      this.direction = this.nextDirection;
-    }
-    this.nextDirection = this.directionQueue[0] ?? this.direction;
+    const resolved = resolveQueuedDirection(this.direction, this.nextDirection);
+    this.direction = resolved.direction;
+    this.nextDirection = resolved.nextDirection;
   }
 
   private applyFoodEffect(food: Food, previousTail: Segment): void {
@@ -239,11 +623,11 @@ export class MainScene extends Phaser.Scene {
 
     this.callbacks.onEvent?.({ type: 'powerup', foodType: food.type });
     if (food.type === 'bomb') {
-      this.eliminateTail(GAME_CONFIG.bombRemoveCount, '炸弹!');
+      this.eliminateTail(GAME_CONFIG.bombRemoveCount + this.modifiers.bombExtraRemove, '鐐稿脊!');
     }
     if (food.type === 'slow') {
       this.slowUntil = this.time.now + GAME_CONFIG.slowDurationMs;
-      this.showFloatingText('减速!', 0x9df7ff);
+      this.showFloatingText('鍑忛€?', 0x9df7ff);
     }
   }
 
@@ -267,138 +651,171 @@ export class MainScene extends Phaser.Scene {
     this.snake.splice(this.snake.length - removableCount, removableCount);
     this.eliminated += removableCount;
 
-    if (this.time.now - this.lastEliminateAt <= GAME_CONFIG.comboWindowMs) this.combo += 1;
+    const comboWindow = GAME_CONFIG.comboWindowMs + this.modifiers.comboWindowBonusMs;
+    if (this.time.now - this.lastEliminateAt <= comboWindow) this.combo += 1;
     else this.combo = 1;
 
+    this.successfulEliminations += 1;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.lastEliminateAt = this.time.now;
+
     const baseScore = removableCount * GAME_CONFIG.scorePerSegment;
     const comboBonus = this.combo > 1 ? GAME_CONFIG.comboBonusBase * (GAME_CONFIG.comboBonusGrowth ** (this.combo - 2)) : 0;
-    const gainedScore = baseScore + comboBonus;
+    const gainedScore = Math.round((baseScore + comboBonus) * this.modifiers.eliminateScoreMultiplier);
     this.score += gainedScore;
-    if (this.effectSettings.screenShakeEnabled) {
-      this.cameras.main.shake(130, 0.006);
+    let comboTimeBonus = 0;
+
+    if (this.mode.id === 'sprint' || this.mode.id === 'daily') {
+      const earlyRunBonus = this.successfulEliminations <= 2 ? 1 : 0;
+      comboTimeBonus = this.combo >= 4 ? 3 : this.combo >= 2 ? 2 : 0;
+      const seconds = GAME_CONFIG.sprintBonusSecondsPerEliminate + this.modifiers.extraSecondsPerEliminate + earlyRunBonus + comboTimeBonus;
+      this.addSprintTime(seconds, this.combo > 1 ? `Combo +${seconds}s` : `+${seconds}s`);
     }
+
+    if (this.combo > 1) {
+      const rewardParts = [`连消奖励 +${Math.round(comboBonus)}分`];
+      if ((this.mode.id === 'sprint' || this.mode.id === 'daily') && comboTimeBonus > 0) {
+        rewardParts.push(`额外 +${comboTimeBonus}s`);
+      }
+      this.comboRewardText = `Combo x${this.combo} · ${rewardParts.join(' · ')}`;
+      this.comboRewardUntil = this.time.now + 1800;
+    }
+
+    if (this.effectSettings.screenShakeEnabled) this.cameras.main.shake(110, 0.004);
     this.spawnEliminateParticles(removedSegments);
-    const scoreText = this.combo > 1 ? `+${gainedScore}  Combo x${this.combo}` : `+${gainedScore}`;
-    this.showFloatingText(label ? `${label} +${gainedScore}` : scoreText, this.combo > 1 ? 0xfff06a : 0xffffff);
+    const comboBonusText = this.combo > 1 ? ` BONUS+${Math.round(comboBonus)}` : '';
+    const scoreText = this.combo > 1 ? `Combo x${this.combo} +${gainedScore}${comboBonusText}` : `+${gainedScore}`;
+    this.showFloatingText(label ? `${label} +${gainedScore}${comboBonusText}` : scoreText, this.combo > 1 ? 0xfff06a : 0xffffff);
     this.callbacks.onEvent?.({ type: 'eliminate', count: removableCount, combo: this.combo });
+
+    this.updateMissionProgress({ elimination: true });
+
+    if ((this.mode.id === 'sprint' || this.mode.id === 'daily') && this.successfulEliminations % GAME_CONFIG.upgradeTriggerEvery === 0) {
+      this.prepareUpgradeChoices();
+    }
 
     if (this.snake.length <= 1) {
       this.regenerateTail(5);
-      this.showFloatingText('新尾巴!', 0xfff06a);
+      this.showFloatingText('新尾巴', 0xfff06a);
     }
   }
 
   private regenerateTail(count: number): void {
-    const head = this.snake[0] ?? {
-      x: Math.floor(GAME_CONFIG.boardSize / 2),
-      y: Math.floor(GAME_CONFIG.boardSize / 2),
-      color: getRandomBasicColor(),
-    };
-
-    this.snake = [head];
-    let previous = head;
-    const colors = this.createRegeneratedTailColors(count);
-
-    for (let index = 0; index < count; index += 1) {
-      const nextPoint = this.findTailSpawnPoint(previous);
-      const segment = {
-        ...nextPoint,
-        color: colors[index],
-      };
-      this.snake.push(segment);
-      previous = segment;
-    }
-  }
-
-  private findTailSpawnPoint(previous: Segment): { x: number; y: number } {
-    const reverse = {
-      x: -DIRECTIONS[this.direction].x,
-      y: -DIRECTIONS[this.direction].y,
-    };
-    const preferred = { x: previous.x + reverse.x, y: previous.y + reverse.y };
-    if (this.canUseTailSpawnPoint(preferred)) return preferred;
-
-    const candidates = [
-      { x: previous.x - 1, y: previous.y },
-      { x: previous.x + 1, y: previous.y },
-      { x: previous.x, y: previous.y - 1 },
-      { x: previous.x, y: previous.y + 1 },
-    ];
-
-    return candidates.find((point) => this.canUseTailSpawnPoint(point)) ?? previous;
-  }
-
-  private canUseTailSpawnPoint(point: { x: number; y: number }): boolean {
-    return !this.isWallHit(point) && !this.snake.some((segment) => samePoint(segment, point));
-  }
-
-  private createRegeneratedTailColors(count: number): BasicSnakeColor[] {
-    const shuffled = [...BASIC_COLOR_IDS].sort(() => Math.random() - 0.5);
-    while (shuffled.length < count) {
-      shuffled.push(getRandomBasicColor());
-    }
-    return shuffled.slice(0, count);
+    this.snake = regenerateTailFromSystem({
+      snake: this.snake,
+      direction: this.direction,
+      count,
+      columns: GAME_CONFIG.boardColumns,
+      rows: GAME_CONFIG.boardRows,
+      nextRandom: () => this.nextRandom(),
+    });
   }
 
   private refillFoods(): void {
-    let guard = 0;
-    while (this.foods.length < GAME_CONFIG.targetFoodCount && guard < 300) {
-      guard += 1;
-      const food = this.createFood();
-      if (this.isCellFree(food)) this.foods.push(food);
-    }
-  }
-
-  private createFood(): Food {
-    const type = this.pickFoodType();
-    return {
-      x: Phaser.Math.Between(0, GAME_CONFIG.boardSize - 1),
-      y: Phaser.Math.Between(0, GAME_CONFIG.boardSize - 1),
-      type,
-      color: type === 'rainbow' ? 'rainbow' : this.pickNextFoodColor(),
-    };
+    if (this.mode.id === 'puzzle') return;
+    this.foods = refillFoodsToTarget({
+      foods: this.foods,
+      targetCount: this.mode.id === 'rush' ? 16 : GAME_CONFIG.targetFoodCount,
+      maxAttempts: 300,
+      createCandidate: () =>
+        createFoodCandidate({
+          columns: GAME_CONFIG.boardColumns,
+          rows: GAME_CONFIG.boardRows,
+          nextRandom: () => this.nextRandom(),
+          pickType: () => this.pickFoodType(),
+          pickColor: () => this.pickNextFoodColor(),
+        }),
+      isCellFree: (point, foods) =>
+        isCellFreeFromSystem(point, this.snake, foods)
+        && !this.isRushObstacle(point),
+    });
   }
 
   private pickFoodType(): FoodType {
-    if (this.foods.some((food) => food.type !== 'normal')) return 'normal';
-    if (this.eaten < 4 || Math.random() > GAME_CONFIG.specialSpawnChance) return 'normal';
-    const roll = Math.random();
-    if (roll < 0.36) return 'bomb';
-    if (roll < 0.68) return 'rainbow';
-    return 'slow';
+    if (this.mode.id === 'rush') return 'normal';
+    return pickFoodTypeFromSystem({
+      foods: this.foods,
+      eaten: this.eaten,
+      nextRandom: () => this.nextRandom(),
+      specialSpawnBonus: this.dailyChallenge?.specialSpawnBonus,
+      rainbowLuckBonus: this.modifiers.rainbowLuckBonus,
+    });
   }
 
   private pickNextFoodColor(): BasicSnakeColor {
-    const tailTarget = this.getTailTargetColor();
-    if (tailTarget && Math.random() < this.getTailTargetWeight()) return tailTarget;
-    return this.pickBalancedColor();
-  }
-
-  private getTailTargetColor(): BasicSnakeColor | undefined {
-    const tail = this.snake.slice(-(GAME_CONFIG.eliminateThreshold - 1));
-    if (tail.length < GAME_CONFIG.eliminateThreshold - 1) return undefined;
-    const normalColors = tail.filter((segment) => segment.color !== 'rainbow').map((segment) => segment.color as BasicSnakeColor);
-    if (normalColors.length === 0) return getRandomBasicColor();
-    return normalColors.every((color) => color === normalColors[0]) ? normalColors[0] : undefined;
-  }
-
-  private getTailTargetWeight(): number {
-    const secondsSinceEliminate = this.lastEliminateAt ? (this.time.now - this.lastEliminateAt) / 1000 : this.getSurvivalSeconds();
-    if (secondsSinceEliminate > 18) return 0.72;
-    if (secondsSinceEliminate > 10) return 0.58;
-    return 0.42;
-  }
-
-  private pickBalancedColor(): BasicSnakeColor {
-    const counts = new Map<BasicSnakeColor, number>();
-    this.foods.forEach((food) => {
-      if (food.type === 'normal' && food.color !== 'rainbow') counts.set(food.color as BasicSnakeColor, (counts.get(food.color as BasicSnakeColor) ?? 0) + 1);
+    return pickNextFoodColorFromSystem({
+      snake: this.snake,
+      foods: this.foods,
+      nextRandom: () => this.nextRandom(),
+      lastEliminateAt: this.lastEliminateAt,
+      timeNow: this.time.now,
+      survivalSeconds: this.getSurvivalSeconds(),
+      targetWeightBonus: this.modifiers.targetWeightBonus,
+      isSprintLike: this.mode.id === 'sprint' || this.mode.id === 'daily',
     });
-    const min = Math.min(...BASIC_COLOR_IDS.map((color) => counts.get(color) ?? 0));
-    const rare = BASIC_COLOR_IDS.filter((color) => (counts.get(color) ?? 0) === min);
-    return rare[Math.floor(Math.random() * rare.length)];
+  }
+
+  private createMissionStates(): MissionState[] {
+    if (this.mode.id !== 'sprint' && this.mode.id !== 'daily') return [];
+    return createMissionStatesFromSystem(() => this.nextRandom(), this.dailyChallenge?.missionOffset);
+  }
+
+  private updateMissionProgress(event: { foodType?: FoodType; elimination?: boolean }): void {
+    if (this.missionStates.length === 0) return;
+
+    let changed = false;
+    this.missionStates = this.missionStates.map((mission) => {
+      if (mission.completed) return mission;
+      const nextProgress = this.getMissionProgress(mission.id, mission.progress, event);
+      const completed = nextProgress >= mission.target;
+      if (!completed) {
+        if (nextProgress !== mission.progress) changed = true;
+        return { ...mission, progress: nextProgress };
+      }
+
+      changed = true;
+      const definition = getMissionDefinition(mission.id);
+      if (definition) this.applyMissionReward(definition);
+      this.callbacks.onEvent?.({ type: 'mission' });
+      this.showFloatingText(`任务完成 ${mission.rewardText}`, 0x88d94f);
+      return { ...mission, progress: mission.target, completed: true };
+    });
+
+    if (changed) this.publishSnapshot();
+  }
+
+  private getMissionProgress(id: MissionId, previous: number, event: { foodType?: FoodType; elimination?: boolean }): number {
+    return getMissionProgressFromSystem(
+      id,
+      previous,
+      { score: this.score, maxCombo: this.maxCombo, eliminated: this.eliminated },
+      event,
+    );
+  }
+
+  private applyMissionReward(definition: MissionDefinition): void {
+    if (definition.reward.score) this.score += definition.reward.score;
+    if (definition.reward.seconds && (this.mode.id === 'sprint' || this.mode.id === 'daily')) {
+      this.addSprintTime(definition.reward.seconds, `任务 +${definition.reward.seconds}s`);
+    }
+  }
+
+  private prepareUpgradeChoices(): void {
+    if (this.status !== 'playing') return;
+    this.upgradeChoices = pickUpgradeChoicesFromSystem(3, () => this.nextRandom());
+    this.status = 'upgrade';
+    this.pausedAt = this.time.now;
+    this.publishSnapshot();
+  }
+
+  private applyUpgrade(id: UpgradeId): void {
+    applyUpgradeEffect(id, this.modifiers, (seconds, label) => this.addSprintTime(seconds, label));
+  }
+
+  private addSprintTime(seconds: number, label: string): void {
+    if (this.mode.id !== 'sprint' && this.mode.id !== 'daily') return;
+    this.sprintBonusMs += seconds * 1000;
+    this.showFloatingText(label, 0x8ee7ff);
   }
 
   private checkModeEndConditions(): void {
@@ -420,6 +837,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private hasReachedGoal(): boolean {
+    if (this.mode.id === 'puzzle') return this.foods.length === 0;
+    if (this.mode.id === 'rush') return Boolean(this.mode.targetScore && this.score >= this.mode.targetScore);
+    if (this.mode.id === 'daily') return Boolean(this.dailyChallenge && this.score >= this.dailyChallenge.targetScore);
     if (this.mode.id === 'standard') return Boolean(this.mode.targetScore && this.score >= this.mode.targetScore);
     if (this.mode.id === 'timed') {
       return Boolean((this.mode.targetScore && this.score >= this.mode.targetScore) || (this.mode.targetEliminated && this.eliminated >= this.mode.targetEliminated));
@@ -429,98 +849,141 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getObjectiveText(): string {
+    if (this.mode.id === 'puzzle') {
+      const level = this.getPuzzleLevel();
+      return `第 ${this.puzzleLevelIndex + 1}/${PUZZLE_LEVELS.length} 关 · ${level.name} · ${this.puzzleTargetsCleared}/${level.targets.length}`;
+    }
+    if (this.mode.id === 'sprint') return '目标：90 秒内冲更高分，三消可以返时并解锁强化';
+    if (this.mode.id === 'daily') return `今日挑战：${this.dailyChallenge?.title ?? '每日挑战'} · 达到 ${this.dailyChallenge?.targetScore ?? 0} 分`;
     if (this.mode.id === 'standard') return `目标：达到 ${this.mode.targetScore} 分过关`;
-    if (this.mode.id === 'endless') return '目标：穿墙循环，挑战更高分';
-    if (this.mode.id === 'timed') return `目标：${this.mode.timeLimitSeconds}s 内 ${this.mode.targetScore} 分或消除 ${this.mode.targetEliminated} 节`;
+    if (this.mode.id === 'endless') return '目标：穿墙循环，挑战更高分数';
+    if (this.mode.id === 'timed') return `目标：${this.mode.timeLimitSeconds}s 内冲 ${this.mode.targetScore} 分或消除 ${this.mode.targetEliminated} 节`;
     if (this.mode.id === 'steps') return `目标：${this.mode.stepLimit} 步内消除 ${this.mode.targetEliminated} 节`;
     return `目标：${this.mode.stepLimit} 步结束时长度 = ${this.mode.targetLength}`;
   }
 
-  private isCellFree(point: { x: number; y: number }): boolean {
-    return !this.snake.some((segment) => samePoint(segment, point)) && !this.foods.some((food) => samePoint(food, point));
+  private isWallHit(point: { x: number; y: number }): boolean {
+    if (this.isPuzzleWall(point)) return true;
+    if (this.isRushObstacle(point)) return true;
+    return isPointOutOfBounds(point, GAME_CONFIG.boardColumns, GAME_CONFIG.boardRows);
   }
 
-  private isWallHit(point: { x: number; y: number }): boolean {
-    return point.x < 0 || point.y < 0 || point.x >= GAME_CONFIG.boardSize || point.y >= GAME_CONFIG.boardSize;
+  private isPuzzleWall(point: Point): boolean {
+    if (this.mode.id !== 'puzzle') return false;
+    return this.puzzleWalls.some((wall) => samePoint(wall, point)) || isPuzzleWall(this.getPuzzleLevel(), point);
+  }
+
+  private isRushObstacle(point: Point): boolean {
+    if (this.mode.id !== 'rush') return false;
+    return this.rushObstacles.some((obstacle) => samePoint(obstacle, point));
   }
 
   private wrapPoint(point: { x: number; y: number }): { x: number; y: number } {
-    return {
-      x: (point.x + GAME_CONFIG.boardSize) % GAME_CONFIG.boardSize,
-      y: (point.y + GAME_CONFIG.boardSize) % GAME_CONFIG.boardSize,
-    };
+    return wrapBoardPoint(point, GAME_CONFIG.boardColumns, GAME_CONFIG.boardRows);
   }
 
-  private handleKeyboardInput(): void {
-    if (this.justDown(this.cursors?.left) || this.justDown(this.keys?.A)) this.setDirection('left');
-    if (this.justDown(this.cursors?.right) || this.justDown(this.keys?.D)) this.setDirection('right');
-    if (this.justDown(this.cursors?.up) || this.justDown(this.keys?.W)) this.setDirection('up');
-    if (this.justDown(this.cursors?.down) || this.justDown(this.keys?.S)) this.setDirection('down');
-    if (this.justDown(this.keys?.SPACE)) this.togglePause();
-  }
-
-  private justDown(key?: Phaser.Input.Keyboard.Key): boolean {
-    return Boolean(key && Phaser.Input.Keyboard.JustDown(key));
+  private handleKeyDown(event: KeyboardEvent): void {
+    if (this.inputLocked) return;
+    if (event.repeat && event.code === 'Space') return;
+    if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+      event.preventDefault();
+      this.setDirection('left');
+      return;
+    }
+    if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+      event.preventDefault();
+      this.setDirection('right');
+      return;
+    }
+    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
+      event.preventDefault();
+      this.setDirection('up');
+      return;
+    }
+    if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+      event.preventDefault();
+      this.setDirection('down');
+      return;
+    }
+    if (event.code === 'Space') {
+      event.preventDefault();
+      if (this.mode.id === 'rush') this.activateSkill();
+      else this.togglePause();
+    }
+    if (event.code === 'KeyP' || event.code === 'Escape') {
+      event.preventDefault();
+      this.togglePause();
+    }
   }
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.inputLocked) return;
     this.touchStart = new Phaser.Math.Vector2(pointer.x, pointer.y);
   }
 
   private handlePointerUp(pointer: Phaser.Input.Pointer): void {
-    if (!this.touchStart) return;
+    if (this.inputLocked) return;
+    if (!this.touchStart || this.status === 'upgrade') return;
     const end = new Phaser.Math.Vector2(pointer.x, pointer.y);
     const delta = end.subtract(this.touchStart);
     this.touchStart = undefined;
-    if (delta.length() < 24) return;
+    if (delta.length() < 16) return;
     if (Math.abs(delta.x) > Math.abs(delta.y)) this.setDirection(delta.x > 0 ? 'right' : 'left');
     else this.setDirection(delta.y > 0 ? 'down' : 'up');
   }
 
   private handleResize(): void {
-    const width = this.scale.width;
-    const height = this.scale.height;
-    const available = Math.min(width - 10, height - 10);
-    this.cellSize = Math.floor(available / GAME_CONFIG.boardSize);
-    const boardPixels = this.cellSize * GAME_CONFIG.boardSize;
-    this.boardOrigin = {
-      x: Math.floor((width - boardPixels) / 2),
-      y: Math.floor((height - boardPixels) / 2),
-    };
+    const layout = calculateBoardLayout(
+      this.scale.width,
+      this.scale.height,
+      GAME_CONFIG.boardColumns,
+      GAME_CONFIG.boardRows,
+    );
+    this.cellSize = layout.cellSize;
+    this.boardOrigin = layout.origin;
     this.draw();
   }
 
   private draw(): void {
     if (!this.graphics) return;
     const g = this.graphics;
-    const boardPixels = this.cellSize * GAME_CONFIG.boardSize;
+    const boardPixelsWidth = this.cellSize * GAME_CONFIG.boardColumns;
+    const boardPixelsHeight = this.cellSize * GAME_CONFIG.boardRows;
     const radius = Math.max(8, this.cellSize * 0.22);
 
     g.clear();
     g.fillStyle(0x5b321c, 1);
-    g.fillRoundedRect(this.boardOrigin.x - 6, this.boardOrigin.y - 6, boardPixels + 12, boardPixels + 12, 16);
+    g.fillRoundedRect(this.boardOrigin.x - 6, this.boardOrigin.y - 6, boardPixelsWidth + 12, boardPixelsHeight + 12, 16);
     g.fillStyle(0xffd47b, 1);
-    g.fillRoundedRect(this.boardOrigin.x, this.boardOrigin.y, boardPixels, boardPixels, 14);
+    g.fillRoundedRect(this.boardOrigin.x, this.boardOrigin.y, boardPixelsWidth, boardPixelsHeight, 14);
 
     if (this.isDangerLength()) {
       g.lineStyle(5, 0xff4d2f, 0.8);
-      g.strokeRoundedRect(this.boardOrigin.x - 4, this.boardOrigin.y - 4, boardPixels + 8, boardPixels + 8, 16);
+      g.strokeRoundedRect(this.boardOrigin.x - 4, this.boardOrigin.y - 4, boardPixelsWidth + 8, boardPixelsHeight + 8, 16);
     }
 
     g.lineStyle(1, 0xe9a84e, 0.38);
-    for (let index = 1; index < GAME_CONFIG.boardSize; index += 1) {
+    for (let index = 1; index < GAME_CONFIG.boardColumns; index += 1) {
       const offset = index * this.cellSize;
-      g.lineBetween(this.boardOrigin.x + offset, this.boardOrigin.y, this.boardOrigin.x + offset, this.boardOrigin.y + boardPixels);
-      g.lineBetween(this.boardOrigin.x, this.boardOrigin.y + offset, this.boardOrigin.x + boardPixels, this.boardOrigin.y + offset);
+      g.lineBetween(this.boardOrigin.x + offset, this.boardOrigin.y, this.boardOrigin.x + offset, this.boardOrigin.y + boardPixelsHeight);
+    }
+    for (let index = 1; index < GAME_CONFIG.boardRows; index += 1) {
+      const offset = index * this.cellSize;
+      g.lineBetween(this.boardOrigin.x, this.boardOrigin.y + offset, this.boardOrigin.x + boardPixelsWidth, this.boardOrigin.y + offset);
     }
 
+    if (this.mode.id === 'puzzle') {
+      this.puzzleWalls.forEach((wall) => this.drawPuzzleWall(wall, radius));
+    } else if (this.mode.id === 'rush') {
+      this.rushObstacles.forEach((wall) => this.drawRushObstacle(wall, radius));
+    }
     this.foods.forEach((food) => this.drawFood(food, radius));
     this.snake.forEach((segment, index) => this.drawSegment(segment, index, radius));
   }
 
   private drawFood(food: Food, radius: number): void {
     if (!this.graphics) return;
-    const rect = this.cellRect(food.x, food.y, 0.22);
+    const rect = this.cellRect(food.x, food.y, food.requiredDirection ? 0.14 : 0.22);
     this.graphics.fillStyle(0x2b1710, 1);
     this.graphics.fillRoundedRect(rect.x - 2, rect.y - 2, rect.size + 4, rect.size + 4, radius);
     if (this.shouldGlowFood(food)) {
@@ -530,21 +993,43 @@ export class MainScene extends Phaser.Scene {
     this.graphics.fillStyle(this.getFoodFill(food), 1);
     this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
 
-    if (food.type !== 'normal') {
-      this.drawSpecialIcon(food, rect);
+    if (food.requiredDirection) {
+      this.drawDirectionMark(food.requiredDirection, rect, 0x24110b);
+      return;
     }
+
+    if (food.type !== 'normal') this.drawSpecialIcon(food, rect);
   }
 
   private shouldGlowFood(food: Food): boolean {
-    const target = this.getTailTargetColor();
+    if (food.requiredDirection) return false;
+    const target = getTailTargetColorFromSystem(this.snake, () => this.nextRandom());
     if (!target) return false;
     return food.type === 'rainbow' || (food.type === 'normal' && food.color === target);
   }
 
   private getFoodFill(food: Food): number {
+    if (food.requiredDirection) return 0xffffff;
     if (food.type === 'bomb') return 0xff4d2f;
     if (food.type === 'slow') return 0x8ee7ff;
     return getColorFill(food.color);
+  }
+
+  private drawPuzzleWall(point: Point, radius: number): void {
+    if (!this.graphics) return;
+    const rect = this.cellRect(point.x, point.y, 0.12);
+    this.graphics.fillStyle(0x6f4a2f, 1);
+    this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
+  }
+
+  private drawRushObstacle(point: Point, radius: number): void {
+    if (!this.graphics) return;
+    const rect = this.cellRect(point.x, point.y, 0.14);
+    this.graphics.fillStyle(0x6c4428, 1);
+    this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
+    this.graphics.lineStyle(3, 0xa16a39, 0.95);
+    this.graphics.lineBetween(rect.x + rect.size * 0.22, rect.y + rect.size * 0.22, rect.x + rect.size * 0.78, rect.y + rect.size * 0.78);
+    this.graphics.lineBetween(rect.x + rect.size * 0.78, rect.y + rect.size * 0.22, rect.x + rect.size * 0.22, rect.y + rect.size * 0.78);
   }
 
   private drawSpecialIcon(food: Food, rect: { x: number; y: number; size: number }): void {
@@ -581,6 +1066,70 @@ export class MainScene extends Phaser.Scene {
     this.graphics.lineBetween(cx, cy, cx + r * 0.5, cy + r * 0.25);
   }
 
+  private drawDirectionMark(direction: Direction, rect: { x: number; y: number; size: number }, color: number): void {
+    if (!this.graphics) return;
+    const centerX = rect.x + rect.size / 2;
+    const centerY = rect.y + rect.size / 2;
+    const length = rect.size * 0.7;
+    const shaft = Math.max(4, rect.size * 0.16);
+    const head = rect.size * 0.26;
+    const halfShaft = shaft / 2;
+
+    let points: Phaser.Math.Vector2[] = [];
+    if (direction === 'up') {
+      points = [
+        new Phaser.Math.Vector2(centerX, centerY - length / 2),
+        new Phaser.Math.Vector2(centerX - head, centerY - length / 2 + head),
+        new Phaser.Math.Vector2(centerX - halfShaft, centerY - length / 2 + head),
+        new Phaser.Math.Vector2(centerX - halfShaft, centerY + length / 2),
+        new Phaser.Math.Vector2(centerX + halfShaft, centerY + length / 2),
+        new Phaser.Math.Vector2(centerX + halfShaft, centerY - length / 2 + head),
+        new Phaser.Math.Vector2(centerX + head, centerY - length / 2 + head),
+      ];
+    } else if (direction === 'down') {
+      points = [
+        new Phaser.Math.Vector2(centerX, centerY + length / 2),
+        new Phaser.Math.Vector2(centerX - head, centerY + length / 2 - head),
+        new Phaser.Math.Vector2(centerX - halfShaft, centerY + length / 2 - head),
+        new Phaser.Math.Vector2(centerX - halfShaft, centerY - length / 2),
+        new Phaser.Math.Vector2(centerX + halfShaft, centerY - length / 2),
+        new Phaser.Math.Vector2(centerX + halfShaft, centerY + length / 2 - head),
+        new Phaser.Math.Vector2(centerX + head, centerY + length / 2 - head),
+      ];
+    } else if (direction === 'left') {
+      points = [
+        new Phaser.Math.Vector2(centerX - length / 2, centerY),
+        new Phaser.Math.Vector2(centerX - length / 2 + head, centerY - head),
+        new Phaser.Math.Vector2(centerX - length / 2 + head, centerY - halfShaft),
+        new Phaser.Math.Vector2(centerX + length / 2, centerY - halfShaft),
+        new Phaser.Math.Vector2(centerX + length / 2, centerY + halfShaft),
+        new Phaser.Math.Vector2(centerX - length / 2 + head, centerY + halfShaft),
+        new Phaser.Math.Vector2(centerX - length / 2 + head, centerY + head),
+      ];
+    } else {
+      points = [
+        new Phaser.Math.Vector2(centerX + length / 2, centerY),
+        new Phaser.Math.Vector2(centerX + length / 2 - head, centerY - head),
+        new Phaser.Math.Vector2(centerX + length / 2 - head, centerY - halfShaft),
+        new Phaser.Math.Vector2(centerX - length / 2, centerY - halfShaft),
+        new Phaser.Math.Vector2(centerX - length / 2, centerY + halfShaft),
+        new Phaser.Math.Vector2(centerX + length / 2 - head, centerY + halfShaft),
+        new Phaser.Math.Vector2(centerX + length / 2 - head, centerY + head),
+      ];
+    }
+
+    this.graphics.fillStyle(color, 1);
+    this.graphics.lineStyle(Math.max(2, rect.size * 0.06), 0x2a1810, 0.9);
+    this.graphics.beginPath();
+    this.graphics.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) {
+      this.graphics.lineTo(points[index].x, points[index].y);
+    }
+    this.graphics.closePath();
+    this.graphics.fillPath();
+    this.graphics.strokePath();
+  }
+
   private drawSegment(segment: Segment, index: number, radius: number): void {
     if (!this.graphics) return;
     const rect = this.cellRect(segment.x, segment.y, 0.12);
@@ -608,6 +1157,9 @@ export class MainScene extends Phaser.Scene {
       this.graphics.fillStyle(0x24110b, 1);
       this.graphics.fillCircle(rect.x + rect.size * 0.34, rect.y + rect.size * 0.38, Math.max(2, rect.size * 0.08));
       this.graphics.fillCircle(rect.x + rect.size * 0.66, rect.y + rect.size * 0.38, Math.max(2, rect.size * 0.08));
+      if (this.mode.id === 'puzzle') {
+        this.drawDirectionMark(this.direction, rect, 0x24110b);
+      }
     }
   }
 
@@ -628,14 +1180,40 @@ export class MainScene extends Phaser.Scene {
   }
 
   private publishSnapshot(): void {
+    const puzzleLevel = this.mode.id === 'puzzle' ? this.getPuzzleLevel() : undefined;
+    const objectiveText = this.mode.id === 'rush'
+      ? `目标：45 秒内冲到 ${this.mode.targetScore ?? 1200} 分，空格直线开路`
+      : this.getObjectiveText();
     this.callbacks.onSnapshot?.({
       mode: this.mode.id,
-      objectiveText: this.getObjectiveText(),
+      objectiveText,
+      dailyChallengeText: this.mode.id === 'puzzle' ? this.puzzleTip : this.dailyChallenge?.description,
+      dailyChallengeKey: this.dailyChallenge?.key,
+      dailyStickerName: this.dailyChallenge?.stickerName,
+      puzzleOptimalSteps: puzzleLevel?.optimalSteps,
+      puzzleStepDelta: puzzleLevel?.optimalSteps !== undefined
+        ? this.stepsUsed - puzzleLevel.optimalSteps
+        : undefined,
+      comboRewardText: this.time.now < this.comboRewardUntil ? this.comboRewardText : undefined,
+      rushSkillReady: this.mode.id === 'rush' ? this.time.now >= this.rushSkillCooldownUntil : undefined,
+      rushSkillCooldownSeconds: this.mode.id === 'rush' && this.time.now < this.rushSkillCooldownUntil
+        ? Math.ceil((this.rushSkillCooldownUntil - this.time.now) / 1000)
+        : undefined,
+      rushClearedObstacles: this.mode.id === 'rush' ? this.rushClearedObstacles : undefined,
+      rushSkillUses: this.mode.id === 'rush' ? this.rushSkillUses : undefined,
+      resumeCountdownSeconds: this.status === 'resume' ? Math.max(1, Math.ceil((this.resumeUntil - this.time.now) / 1000)) : undefined,
+      resumeCountdownProgress: this.status === 'resume' ? Phaser.Math.Clamp((this.resumeUntil - this.time.now) / 3000, 0, 1) : undefined,
+      upgradeCharge: this.mode.id === 'sprint' || this.mode.id === 'daily'
+        ? this.status === 'upgrade'
+          ? GAME_CONFIG.upgradeTriggerEvery
+          : this.successfulEliminations % GAME_CONFIG.upgradeTriggerEvery
+        : undefined,
+      upgradeChargeTarget: this.mode.id === 'sprint' || this.mode.id === 'daily' ? GAME_CONFIG.upgradeTriggerEvery : undefined,
       score: this.score,
       length: this.snake.length,
       combo: this.combo,
       maxCombo: this.maxCombo,
-      eliminated: this.eliminated,
+      eliminated: this.mode.id === 'puzzle' ? this.puzzleTargetsCleared : this.eliminated,
       eaten: this.eaten,
       stepsUsed: this.stepsUsed,
       stepsLeft: this.mode.stepLimit ? this.getStepsLeft() : undefined,
@@ -647,18 +1225,25 @@ export class MainScene extends Phaser.Scene {
       isDanger: this.isDangerLength(),
       isSlowed: this.time.now < this.slowUntil,
       objectiveCompleted: this.objectiveCompleted,
+      missionStates: this.missionStates,
+      selectedUpgrades: this.selectedUpgrades,
+      upgradeChoices: this.upgradeChoices,
       status: this.status,
     });
   }
 
   private getSurvivalSeconds(): number {
-    const activeUntil = this.status === 'paused' ? this.pausedAt : this.time.now;
+    const activeUntil = this.status === 'paused' || this.status === 'upgrade' || this.status === 'resume' ? this.pausedAt : this.time.now;
     return Math.max(0, Math.floor((activeUntil - this.startAt - this.pausedDuration) / 1000));
+  }
+
+  private getAvailableSeconds(): number {
+    return (this.mode.timeLimitSeconds ?? 0) + Math.floor(this.sprintBonusMs / 1000);
   }
 
   private getRemainingSeconds(): number {
     if (!this.mode.timeLimitSeconds) return 0;
-    return Math.max(0, this.mode.timeLimitSeconds - this.getSurvivalSeconds());
+    return Math.max(0, this.getAvailableSeconds() - this.getSurvivalSeconds());
   }
 
   private getStepsLeft(): number {
@@ -669,28 +1254,28 @@ export class MainScene extends Phaser.Scene {
   private getMoveInterval(): number {
     let interval = GAME_CONFIG.moveIntervalMs - this.getModeSpeedBonus();
     if (this.time.now < this.slowUntil) interval *= 1.5;
-    return Math.max(135, interval);
+    return Math.max(this.mode.id === 'rush' ? 122 : 135, interval);
   }
 
   private getModeSpeedBonus(): number {
-    if (this.mode.id === 'standard') {
-      return Math.min(24, Math.floor(this.score / 500) * 8);
+    if (this.mode.id === 'sprint' || this.mode.id === 'daily') {
+      const elapsed = this.mode.timeLimitSeconds ? this.getSurvivalSeconds() / Math.max(1, this.getAvailableSeconds()) : 0;
+      return elapsed > 0.78 ? 14 : elapsed > 0.52 ? 6 : 0;
     }
-
-    if (this.mode.id === 'endless') {
-      return Math.min(35, Math.floor(this.score / 900) * 7);
-    }
-
+    if (this.mode.id === 'standard') return Math.min(24, Math.floor(this.score / 500) * 8);
+    if (this.mode.id === 'endless') return Math.min(35, Math.floor(this.score / 900) * 7);
     if (this.mode.id === 'timed') {
       const elapsed = this.mode.timeLimitSeconds ? this.getSurvivalSeconds() / this.mode.timeLimitSeconds : 0;
       return elapsed > 0.72 ? 18 : elapsed > 0.45 ? 10 : 0;
     }
-
     if (this.mode.id === 'steps') {
       const usedRatio = this.mode.stepLimit ? this.stepsUsed / this.mode.stepLimit : 0;
       return usedRatio > 0.75 ? 12 : 0;
     }
-
+    if (this.mode.id === 'rush') {
+      const elapsed = this.mode.timeLimitSeconds ? this.getSurvivalSeconds() / this.mode.timeLimitSeconds : 0;
+      return elapsed > 0.68 ? 24 : elapsed > 0.38 ? 14 : 6;
+    }
     return 0;
   }
 
@@ -699,24 +1284,26 @@ export class MainScene extends Phaser.Scene {
   }
 
   private showFloatingText(message: string, color: number): void {
-    const x = this.boardOrigin.x + (this.cellSize * GAME_CONFIG.boardSize) / 2;
+    const x = this.boardOrigin.x + (this.cellSize * GAME_CONFIG.boardColumns) / 2;
     const y = this.boardOrigin.y + this.cellSize * 1.2;
+    const isPuzzleMessage = this.mode.id === 'puzzle';
     const text = this.add.text(x, y, message, {
       fontFamily: 'Trebuchet MS, Microsoft YaHei, sans-serif',
-      fontSize: `${Math.max(18, Math.floor(this.cellSize * 0.6))}px`,
+      fontSize: `${Math.max(isPuzzleMessage ? 22 : 18, Math.floor(this.cellSize * (isPuzzleMessage ? 0.72 : 0.6)))}px`,
       fontStyle: 'bold',
       color: `#${color.toString(16).padStart(6, '0')}`,
       stroke: '#2d170d',
-      strokeThickness: 5,
+      strokeThickness: isPuzzleMessage ? 6 : 5,
     });
     text.setOrigin(0.5);
     this.tweens.add({
       targets: text,
-      y: y - this.cellSize * 0.8,
+      y: y - this.cellSize * (isPuzzleMessage ? 0.55 : 0.8),
       alpha: 0,
-      scale: 1.18,
-      duration: 520,
-      ease: 'Back.easeOut',
+      scale: isPuzzleMessage ? 1.08 : 1.18,
+      duration: isPuzzleMessage ? 1100 : 520,
+      ease: isPuzzleMessage ? 'Sine.easeOut' : 'Back.easeOut',
+      hold: isPuzzleMessage ? 380 : 0,
       onComplete: () => text.destroy(),
     });
   }
@@ -770,14 +1357,36 @@ export class MainScene extends Phaser.Scene {
   private finishGame(objectiveCompleted: boolean): void {
     this.objectiveCompleted = objectiveCompleted;
     this.status = 'gameover';
+    const puzzleLevel = this.mode.id === 'puzzle' ? this.getPuzzleLevel() : undefined;
+    const objectiveText = this.mode.id === 'rush'
+      ? `目标：45 秒内冲到 ${this.mode.targetScore ?? 1200} 分，空格直线开路`
+      : this.getObjectiveText();
     const result: GameResult = {
       mode: this.mode.id,
-      objectiveText: this.getObjectiveText(),
+      objectiveText,
+      dailyChallengeText: this.mode.id === 'puzzle' ? this.puzzleTip : this.dailyChallenge?.description,
+      dailyChallengeKey: this.dailyChallenge?.key,
+      dailyStickerName: this.dailyChallenge?.stickerName,
+      puzzleOptimalSteps: puzzleLevel?.optimalSteps,
+      puzzleStepDelta: puzzleLevel?.optimalSteps !== undefined
+        ? this.stepsUsed - puzzleLevel.optimalSteps
+        : undefined,
+      comboRewardText: this.time.now < this.comboRewardUntil ? this.comboRewardText : undefined,
+      rushSkillReady: this.mode.id === 'rush' ? this.time.now >= this.rushSkillCooldownUntil : undefined,
+      rushSkillCooldownSeconds: this.mode.id === 'rush' && this.time.now < this.rushSkillCooldownUntil
+        ? Math.ceil((this.rushSkillCooldownUntil - this.time.now) / 1000)
+        : undefined,
+      rushClearedObstacles: this.mode.id === 'rush' ? this.rushClearedObstacles : undefined,
+      rushSkillUses: this.mode.id === 'rush' ? this.rushSkillUses : undefined,
+      resumeCountdownSeconds: undefined,
+      resumeCountdownProgress: undefined,
+      upgradeCharge: this.mode.id === 'sprint' || this.mode.id === 'daily' ? this.successfulEliminations % GAME_CONFIG.upgradeTriggerEvery : undefined,
+      upgradeChargeTarget: this.mode.id === 'sprint' || this.mode.id === 'daily' ? GAME_CONFIG.upgradeTriggerEvery : undefined,
       score: this.score,
       length: this.snake.length,
       combo: this.combo,
       maxCombo: this.maxCombo,
-      eliminated: this.eliminated,
+      eliminated: this.mode.id === 'puzzle' ? this.puzzleTargetsCleared : this.eliminated,
       eaten: this.eaten,
       stepsUsed: this.stepsUsed,
       stepsLeft: this.mode.stepLimit ? this.getStepsLeft() : undefined,
@@ -789,9 +1398,21 @@ export class MainScene extends Phaser.Scene {
       isDanger: this.isDangerLength(),
       isSlowed: this.time.now < this.slowUntil,
       objectiveCompleted,
+      missionStates: this.missionStates,
+      selectedUpgrades: this.selectedUpgrades,
+      upgradeChoices: [],
       status: this.status,
       finalLength: this.snake.length,
     };
+    if (this.mode.id === 'daily' && this.dailyChallenge?.key) {
+      saveDailyChallengeStatus(this.dailyChallenge.key, result.score, objectiveCompleted);
+      if (objectiveCompleted) {
+        const unlockResult = unlockSticker(this.dailyChallenge.stickerId);
+        if (unlockResult.newlyUnlocked) {
+          result.unlockedStickerLabel = this.dailyChallenge.stickerName;
+        }
+      }
+    }
     const bestScore = saveResult(result);
     const withBest = { ...result, bestScore };
     this.callbacks.onSnapshot?.(withBest);

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>箭蛇冲刺 - DEMO</title>
+    <style>
+        body {
+            background-color: #1a1a2e;
+            color: #fff;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 { margin: 10px 0; font-size: 28px; letter-spacing: 2px; text-shadow: 0 0 10px #4ecca3; }
+        
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(78, 204, 163, 0.2);
+            border: 2px solid #4ecca3;
+            border-radius: 4px;
+        }
+
+        canvas { display: block; background-color: #16213e; }
+
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #4ecca3;
+            pointer-events: none;
+        }
+
+        #controls-hint {
+            margin-top: 15px;
+            color: #888;
+            font-size: 14px;
+        }
+
+        .key {
+            display: inline-block;
+            background: #333;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            margin: 0 2px;
+        }
+
+        #game-over {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        #game-over h2 { color: #e94560; font-size: 36px; margin-bottom: 10px; }
+        
+        button {
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 10px 20px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        button:hover { background: #45b08c; }
+
+    </style>
+</head>
+<body>
+
+    <h1>箭蛇冲刺</h1>
+    
+    <div id="game-container">
+        <canvas id="gameCanvas" width="600" height="600"></canvas>
+        <div id="ui-layer">分数: <span id="score">0</span> / 目标: <span id="target">0</span></div>
+        
+        <div id="game-over">
+            <h2 id="go-title">游戏结束</h2>
+            <p id="go-score">最终得分: 0</p>
+            <button onclick="resetGame()">重新开始</button>
+        </div>
+    </div>
+
+    <div id="controls-hint">
+        操作: <span class="key">↑</span><span class="key">↓</span><span class="key">←</span><span class="key">→</span> 移动 | <span class="key">空格</span> 射击消除障碍
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const targetEl = document.getElementById('target');
+    const gameOverScreen = document.getElementById('game-over');
+    const goTitle = document.getElementById('go-title');
+    const goScore = document.getElementById('go-score');
+
+    // 游戏配置
+    const TILE_SIZE = 20; // 格子大小
+    const GRID_W = canvas.width / TILE_SIZE;
+    const GRID_H = canvas.height / TILE_SIZE;
+    const TOTAL_FOOD = 15; // 通关所需食物数量
+
+    // 游戏状态
+    let snake = [];
+    let direction = { x: 1, y: 0 }; // 当前朝向
+    let nextDirection = { x: 1, y: 0 }; // 缓冲输入
+    let foods = [];
+    let obstacles = []; // 箭头障碍
+    let score = 0;
+    let isGameOver = false;
+    let isLevelComplete = false;
+    let particles = []; // 特效
+
+    // 初始化游戏
+    function initGame() {
+        // 初始化蛇 (长度3)
+        snake = [
+            { x: 5, y: 10 },
+            { x: 4, y: 10 },
+            { x: 3, y: 10 }
+        ];
+        
+        direction = { x: 1, y: 0 };
+        nextDirection = { x: 1, y: 0 };
+        score = 0;
+        isGameOver = false;
+        isLevelComplete = false;
+        particles = [];
+        
+        // 生成食物
+        foods = [];
+        for(let i=0; i<TOTAL_FOOD; i++) {
+            spawnFood();
+        }
+
+        // 生成障碍 (箭头)
+        generateObstacles();
+
+        updateUI();
+        gameOverScreen.style.display = 'none';
+        gameLoop();
+    }
+
+    // 生成单个食物
+    function spawnFood() {
+        let valid = false;
+        let x, y;
+        while(!valid) {
+            x = Math.floor(Math.random() * GRID_W);
+            y = Math.floor(Math.random() * GRID_H);
+            // 检查是否生成在蛇身上
+            valid = !snake.some(s => s.x === x && s.y === y) && !foods.some(f => f.x === x && f.y === y);
+        }
+        foods.push({ x, y });
+    }
+
+    // 生成障碍物 (模拟关卡设计)
+    function generateObstacles() {
+        obstacles = [];
+        // 简单的随机生成，但在蛇前方生成密集的障碍
+        for(let i=0; i<40; i++) {
+            let x = Math.floor(Math.random() * GRID_W);
+            let y = Math.floor(Math.random() * GRID_H);
+            // 避开蛇头出生点
+            if(x > 10) {
+                obstacles.push({ x, y, type: 'arrow' });
+            }
+        }
+    }
+
+    // 核心逻辑：更新
+    function update() {
+        if (isGameOver || isLevelComplete) return;
+
+        // 更新方向
+        direction = nextDirection;
+
+        // 计算新蛇头位置
+        const head = { x: snake[0].x + direction.x, y: snake[0].y + direction.y };
+
+        // 1. 撞墙检测
+        if (head.x < 0 || head.x >= GRID_W || head.y < 0 || head.y >= GRID_H) {
+            gameOver();
+            return;
+        }
+
+        // 2. 撞自己检测
+        if (snake.some(s => s.x === head.x && s.y === head.y)) {
+            gameOver();
+            return;
+        }
+
+        // 3. 撞障碍物检测
+        const hitObstacleIndex = obstacles.findIndex(o => o.x === head.x && o.y === head.y);
+        if (hitObstacleIndex !== -1) {
+            // 撞到了障碍物，死亡（在PRD中，必须射击消除才能通过）
+            gameOver();
+            return;
+        }
+
+        // 移动蛇 (加入新头)
+        snake.unshift(head);
+
+        // 4. 吃食物检测
+        const foodIndex = foods.findIndex(f => f.x === head.x && f.y === head.y);
+        if (foodIndex !== -1) {
+            foods.splice(foodIndex, 1); // 移除食物
+            score++;
+            spawnFood(); // 补充一个，或者如果不补充就是固定数量
+            createParticles(head.x, head.y, '#ffd700'); // 金色特效
+        } else {
+            snake.pop(); // 没吃到食物，移除尾巴
+        }
+
+        // 检查通关
+        if (score >= TOTAL_FOOD) {
+            levelComplete();
+        }
+
+        updateUI();
+    }
+
+    // 核心玩法：射击消除
+    function shoot() {
+        if (isGameOver || isLevelComplete) return;
+
+        const head = snake[0];
+        let removedCount = 0;
+
+        // 沿着当前方向遍历，清除所有障碍
+        // 这是一个简单的射线检测
+        for (let i = 1; i < Math.max(GRID_W, GRID_H); i++) {
+            let tx = head.x + (direction.x * i);
+            let ty = head.y + (direction.y * i);
+
+            // 边界检查
+            if (tx < 0 || tx >= GRID_W || ty < 0 || ty >= GRID_H) break;
+
+            // 查找该位置是否有障碍
+            const obsIndex = obstacles.findIndex(o => o.x === tx && o.y === ty);
+            if (obsIndex !== -1) {
+                obstacles.splice(obsIndex, 1);
+                removedCount++;
+                createParticles(tx, ty, '#e94560'); // 红色消除特效
+            }
+        }
+
+        // 如果消除了障碍，给予少量分数奖励或特效反馈
+        if (removedCount > 0) {
+            // 可以在这里加音效
+        }
+    }
+
+    // 粒子特效系统 (增加爽感)
+    function createParticles(x, y, color) {
+        for(let i=0; i<5; i++) {
+            particles.push({
+                x: x * TILE_SIZE + TILE_SIZE/2,
+                y: y * TILE_SIZE + TILE_SIZE/2,
+                vx: (Math.random() - 0.5) * 4,
+                vy: (Math.random() - 0.5) * 4,
+                life: 1.0,
+                color: color
+            });
+        }
+    }
+
+    function updateParticles() {
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.05;
+            if(p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    // 绘图
+    function draw() {
+        // 清空背景
+        ctx.fillStyle = '#16213e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 绘制网格 (可选，增加科技感)
+        ctx.strokeStyle = '#1f2b4d';
+        ctx.lineWidth = 1;
+        for(let i=0; i<GRID_W; i++) {
+            ctx.beginPath(); ctx.moveTo(i*TILE_SIZE, 0); ctx.lineTo(i*TILE_SIZE, canvas.height); ctx.stroke();
+        }
+        for(let i=0; i<GRID_H; i++) {
+            ctx.beginPath(); ctx.moveTo(0, i*TILE_SIZE); ctx.lineTo(canvas.width, i*TILE_SIZE); ctx.stroke();
+        }
+
+        // 绘制食物
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#ffd700';
+        foods.forEach(f => {
+            ctx.beginPath();
+            ctx.arc(f.x * TILE_SIZE + TILE_SIZE/2, f.y * TILE_SIZE + TILE_SIZE/2, TILE_SIZE/2 - 2, 0, Math.PI*2);
+            ctx.fill();
+        });
+        ctx.shadowBlur = 0;
+
+        // 绘制障碍物 (箭头风格)
+        ctx.fillStyle = '#e94560';
+        obstacles.forEach(o => {
+            const cx = o.x * TILE_SIZE + TILE_SIZE/2;
+            const cy = o.y * TILE_SIZE + TILE_SIZE/2;
+            
+            // 绘制一个三角形箭头
+            ctx.beginPath();
+            ctx.moveTo(cx - 8, cy - 8);
+            ctx.lineTo(cx + 8, cy);
+            ctx.lineTo(cx - 8, cy + 8);
+            ctx.fill();
+        });
+
+        // 绘制蛇
+        snake.forEach((s, index) => {
+            ctx.fillStyle = index === 0 ? '#4ecca3' : '#2a9d8f'; // 头亮，身暗
+            if (index === 0) {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#4ecca3';
+            }
+            ctx.fillRect(s.x * TILE_SIZE + 1, s.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+            
+            // 蛇头眼睛 (指示方向)
+            if (index === 0) {
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(s.x * TILE_SIZE + 4 + direction.x*4, s.y * TILE_SIZE + 4 + direction.y*4, 4, 4);
+            }
+            ctx.shadowBlur = 0;
+        });
+
+        // 绘制粒子
+        particles.forEach(p => {
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x, p.y, 4, 4);
+        });
+        ctx.globalAlpha = 1.0;
+    }
+
+    function gameLoop() {
+        if (!isGameOver) {
+            update();
+            updateParticles();
+            draw();
+            setTimeout(() => requestAnimationFrame(gameLoop), 100); // 控制游戏速度
+        }
+    }
+
+    function updateUI() {
+        scoreEl.innerText = score;
+        targetEl.innerText = TOTAL_FOOD;
+    }
+
+    function gameOver() {
+        isGameOver = true;
+        goTitle.innerText = "游戏结束";
+        goTitle.style.color = "#e94560";
+        goScore.innerText = "最终得分: " + score;
+        gameOverScreen.style.display = 'flex';
+    }
+
+    function levelComplete() {
+        isLevelComplete = true;
+        isGameOver = true; // 暂停循环
+        goTitle.innerText = "关卡完成!";
+        goTitle.style.color = "#4ecca3";
+        goScore.innerText = "完美通关!";
+        gameOverScreen.style.display = 'flex';
+    }
+
+    function resetGame() {
+        initGame();
+    }
+
+    // 键盘监听
+    document.addEventListener('keydown', (e) => {
+        // 防止按键滚动页面
+        if(["Space","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].indexOf(e.code) > -1) {
+            e.preventDefault();
+        }
+
+        switch(e.key) {
+            case 'ArrowUp': if (direction.y === 0) nextDirection = { x: 0, y: -1 }; break;
+            case 'ArrowDown': if (direction.y === 0) nextDirection = { x: 0, y: 1 }; break;
+            case 'ArrowLeft': if (direction.x === 0) nextDirection = { x: -1, y: 0 }; break;
+            case 'ArrowRight': if (direction.x === 0) nextDirection = { x: 1, y: 0 }; break;
+            case ' ': shoot(); break; // 空格射击
+        }
+    });
+
+    // 启动
+    initGame();
+
+</script>
+</body>
+</html>

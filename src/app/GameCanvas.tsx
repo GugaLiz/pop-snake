@@ -1,4 +1,4 @@
-﻿import * as Phaser from 'phaser';
+import * as Phaser from 'phaser';
 import { useEffect, useRef } from 'react';
 import type { GameModeId } from '../config/gameConfig';
 import { MainScene } from '../game/scenes/MainScene';
@@ -9,11 +9,12 @@ type GameCanvasProps = {
   onGameOver: (result: GameResult) => void;
   onEvent: (event: GameEvent) => void;
   screenShakeEnabled: boolean;
+  inputLocked: boolean;
   mode: GameModeId;
-  command: { type: Direction | 'pause' | 'restart' | 'start'; id: number } | null;
+  command: { type: Direction | 'pause' | 'restart' | 'restart-play' | 'start' | 'skill' | 'upgrade-0' | 'upgrade-1' | 'upgrade-2' | 'puzzle-replay' | 'puzzle-next'; id: number } | null;
 };
 
-export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled, mode, command }: GameCanvasProps) {
+export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled, inputLocked, mode, command }: GameCanvasProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const sceneRef = useRef<MainScene | null>(null);
@@ -21,7 +22,13 @@ export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   useEffect(() => {
-    if (!hostRef.current || gameRef.current) return;
+    if (!hostRef.current) return;
+
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
+    gameRef.current?.destroy(true);
+    gameRef.current = null;
+    sceneRef.current = null;
 
     const scene = new MainScene();
     scene.setCallbacks({ onSnapshot, onGameOver, onEvent });
@@ -59,21 +66,17 @@ export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled
       gameRef.current = null;
       sceneRef.current = null;
     };
-  }, []);
-
-  useEffect(() => {
-    sceneRef.current?.setCallbacks({ onSnapshot, onGameOver, onEvent });
-  }, [onEvent, onGameOver, onSnapshot]);
-
-  useEffect(() => {
-    sceneRef.current?.setEffectSettings({ screenShakeEnabled });
-  }, [screenShakeEnabled]);
+  }, [onEvent, onGameOver, onSnapshot, screenShakeEnabled]);
 
   useEffect(() => {
     if (lastModeRef.current === mode) return;
     lastModeRef.current = mode;
     sceneRef.current?.setMode(mode);
   }, [mode]);
+
+  useEffect(() => {
+    sceneRef.current?.setInputLocked(inputLocked);
+  }, [inputLocked]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -89,14 +92,43 @@ export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled
       return;
     }
 
+    if (command.type === 'restart-play') {
+      scene.restart();
+      scene.startGame();
+      return;
+    }
+
+    if (command.type === 'puzzle-replay') {
+      scene.replayPuzzleLevel();
+      scene.startGame();
+      return;
+    }
+
+    if (command.type === 'puzzle-next') {
+      scene.nextPuzzleLevel();
+      scene.startGame();
+      return;
+    }
+
     if (command.type === 'start') {
       scene.startGame();
       return;
     }
 
-    scene.setDirection(command.type);
+    if (command.type === 'skill') {
+      scene.activateSkill();
+      return;
+    }
+
+    if (command.type.startsWith('upgrade-')) {
+      scene.chooseUpgrade(Number(command.type.slice(-1)));
+      return;
+    }
+
+    if (command.type === 'up' || command.type === 'down' || command.type === 'left' || command.type === 'right') {
+      scene.setDirection(command.type);
+    }
   }, [command]);
 
   return <div className="game-canvas" ref={hostRef} aria-label="消消蛇游戏区域" />;
 }
-
