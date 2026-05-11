@@ -7,6 +7,10 @@ export type Point = {
   y: number;
 };
 
+export type Arrow = Point & {
+  direction: Direction;
+};
+
 export type Segment = Point & {
   color: SnakeColor;
 };
@@ -34,6 +38,9 @@ export type GameSnapshot = {
   bestCombo: number;
   isDanger: boolean;
   isSlowed: boolean;
+  arrowsCleared: number;
+  skillCooldownRemainingMs: number;
+  skillReady: boolean;
   objectiveCompleted: boolean;
   status: 'ready' | 'playing' | 'paused' | 'gameover';
 };
@@ -45,8 +52,10 @@ export type GameResult = GameSnapshot & {
 export type GameEvent =
   | { type: 'start' }
   | { type: 'eat'; color: SnakeColor; foodType: FoodType }
+  | { type: 'arrow-eat'; direction: Direction }
   | { type: 'eliminate'; count: number; combo: number }
   | { type: 'powerup'; foodType: Exclude<FoodType, 'normal'> }
+  | { type: 'skill-fire'; hit: boolean }
   | { type: 'gameover'; objectiveCompleted: boolean };
 
 export const DIRECTIONS: Record<Direction, Point> = {

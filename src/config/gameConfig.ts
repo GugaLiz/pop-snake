@@ -2,10 +2,12 @@
   boardSize: 16,
   initialLength: 3,
   targetFoodCount: 24,
+  targetArrowCount: 8,
   eliminateThreshold: 3,
   moveIntervalMs: 165,
   comboWindowMs: 2000,
   scorePerFood: 10,
+  scorePerArrow: 8,
   scorePerSegment: 50,
   comboBonusBase: 5,
   comboBonusGrowth: 2,
@@ -13,6 +15,7 @@
   specialSpawnChance: 0.1,
   slowDurationMs: 5000,
   bombRemoveCount: 3,
+  skillCooldownMs: 6000,
 } as const;
 
 export const GAME_COLORS = [

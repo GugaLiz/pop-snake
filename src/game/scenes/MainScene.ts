@@ -12,7 +12,7 @@ import {
   type SnakeColor,
 } from '../../config/gameConfig';
 import { getBestCombo, getBestScore, getBestSurvivalSeconds, saveResult } from '../../storage/localStorage';
-import { DIRECTIONS, isOpposite, samePoint, type Direction, type Food, type GameEvent, type GameResult, type GameSnapshot, type Segment } from '../types';
+import { DIRECTIONS, isOpposite, samePoint, type Arrow, type Direction, type Food, type GameEvent, type GameResult, type GameSnapshot, type Segment } from '../types';
 
 type GameCallbacks = {
   onSnapshot?: (snapshot: GameSnapshot) => void;
@@ -30,6 +30,7 @@ export class MainScene extends Phaser.Scene {
   private mode: GameModeConfig = GAME_MODES.standard;
   private snake: Segment[] = [];
   private foods: Food[] = [];
+  private arrows: Arrow[] = [];
   private direction: Direction = 'right';
   private nextDirection: Direction = 'right';
   private directionQueue: Direction[] = [];
@@ -38,6 +39,7 @@ export class MainScene extends Phaser.Scene {
   private maxCombo = 0;
   private eliminated = 0;
   private eaten = 0;
+  private arrowsCleared = 0;
   private stepsUsed = 0;
   private objectiveCompleted = false;
   private lastEliminateAt = 0;
@@ -45,6 +47,7 @@ export class MainScene extends Phaser.Scene {
   private pausedDuration = 0;
   private pausedAt = 0;
   private slowUntil = 0;
+  private skillCooldownUntil = 0;
   private status: GameSnapshot['status'] = 'ready';
   private accumulator = 0;
   private cellSize = 44;
@@ -81,7 +84,7 @@ export class MainScene extends Phaser.Scene {
   create(): void {
     this.graphics = this.add.graphics();
     this.cursors = this.input.keyboard?.createCursorKeys();
-    this.keys = this.input.keyboard?.addKeys('W,A,S,D,SPACE') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.keys = this.input.keyboard?.addKeys('W,A,S,D,Q,SPACE') as Record<string, Phaser.Input.Keyboard.Key>;
     this.scale.on('resize', this.handleResize, this);
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.on('pointerup', this.handlePointerUp, this);
@@ -125,7 +128,10 @@ export class MainScene extends Phaser.Scene {
     if (this.status === 'gameover' || this.status === 'ready') return;
     if (this.status === 'paused') {
       this.status = 'playing';
-      this.pausedDuration += this.time.now - this.pausedAt;
+      const pausedFor = this.time.now - this.pausedAt;
+      this.pausedDuration += pausedFor;
+      if (this.slowUntil > this.pausedAt) this.slowUntil += pausedFor;
+      if (this.skillCooldownUntil > this.pausedAt) this.skillCooldownUntil += pausedFor;
     } else {
       this.status = 'paused';
       this.pausedAt = this.time.now;
@@ -137,6 +143,30 @@ export class MainScene extends Phaser.Scene {
     this.resetGame();
   }
 
+  public fireSkill(): void {
+    if (this.status === 'paused' || this.status === 'gameover') return;
+    if (this.status === 'ready') this.startGame();
+    if (this.time.now < this.skillCooldownUntil) return;
+
+    const target = this.findArrowInFront();
+    this.skillCooldownUntil = this.time.now + GAME_CONFIG.skillCooldownMs;
+    this.callbacks.onEvent?.({ type: 'skill-fire', hit: Boolean(target) });
+    if (!target) {
+      this.showFloatingText('技能落空', 0xffffff);
+      this.draw();
+      this.publishSnapshot();
+      return;
+    }
+
+    this.arrows = this.arrows.filter((arrow) => !samePoint(arrow, target));
+    this.arrowsCleared += 1;
+    this.spawnSkillEffect(target);
+    this.showFloatingText('清除箭头!', 0x9df7ff);
+    this.refillArrows();
+    this.draw();
+    this.publishSnapshot();
+  }
+
   private resetGame(): void {
     const mid = Math.floor(GAME_CONFIG.boardSize / 2);
     this.snake = [
@@ -145,6 +175,7 @@ export class MainScene extends Phaser.Scene {
       { x: mid - 1, y: mid, color: 'sun' },
     ];
     this.foods = [];
+    this.arrows = [];
     this.direction = 'right';
     this.nextDirection = 'right';
     this.directionQueue = [];
@@ -153,6 +184,7 @@ export class MainScene extends Phaser.Scene {
     this.maxCombo = 0;
     this.eliminated = 0;
     this.eaten = 0;
+    this.arrowsCleared = 0;
     this.stepsUsed = 0;
     this.objectiveCompleted = false;
     this.lastEliminateAt = 0;
@@ -160,9 +192,11 @@ export class MainScene extends Phaser.Scene {
     this.pausedDuration = 0;
     this.pausedAt = 0;
     this.slowUntil = 0;
+    this.skillCooldownUntil = 0;
     this.status = 'ready';
     this.accumulator = 0;
     this.refillFoods();
+    this.refillArrows();
     this.draw();
     this.publishSnapshot();
   }
@@ -184,6 +218,13 @@ export class MainScene extends Phaser.Scene {
       color: currentHead.color,
     };
 
+    const arrowIndex = this.arrows.findIndex((arrow) => samePoint(arrow, nextHead));
+    const hitArrow = arrowIndex >= 0 ? this.arrows[arrowIndex] : undefined;
+    if (hitArrow && hitArrow.direction !== this.direction) {
+      this.finishGame(false);
+      return;
+    }
+
     const foodIndex = this.foods.findIndex((food) => samePoint(food, nextHead));
     const eatenFood = foodIndex >= 0 ? this.foods[foodIndex] : undefined;
     const grows = Boolean(eatenFood && (eatenFood.type === 'normal' || eatenFood.type === 'rainbow'));
@@ -196,6 +237,15 @@ export class MainScene extends Phaser.Scene {
 
     const previousTail = this.snake[this.snake.length - 1];
     this.moveSnake(nextHead);
+
+    if (hitArrow) {
+      this.arrows.splice(arrowIndex, 1);
+      this.arrowsCleared += 1;
+      this.score += GAME_CONFIG.scorePerArrow;
+      this.callbacks.onEvent?.({ type: 'arrow-eat', direction: hitArrow.direction });
+      this.spawnArrowBreakEffect(hitArrow, false);
+      this.refillArrows();
+    }
 
     if (eatenFood) {
       this.foods.splice(foodIndex, 1);
@@ -351,6 +401,15 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private refillArrows(): void {
+    let guard = 0;
+    while (this.arrows.length < GAME_CONFIG.targetArrowCount && guard < 500) {
+      guard += 1;
+      const arrow = this.createArrow();
+      if (this.canPlaceArrow(arrow)) this.arrows.push(arrow);
+    }
+  }
+
   private createFood(): Food {
     const type = this.pickFoodType();
     return {
@@ -358,6 +417,15 @@ export class MainScene extends Phaser.Scene {
       y: Phaser.Math.Between(0, GAME_CONFIG.boardSize - 1),
       type,
       color: type === 'rainbow' ? 'rainbow' : this.pickNextFoodColor(),
+    };
+  }
+
+  private createArrow(): Arrow {
+    const directions: Direction[] = ['up', 'down', 'left', 'right'];
+    return {
+      x: Phaser.Math.Between(0, GAME_CONFIG.boardSize - 1),
+      y: Phaser.Math.Between(0, GAME_CONFIG.boardSize - 1),
+      direction: directions[Phaser.Math.Between(0, directions.length - 1)],
     };
   }
 
@@ -437,7 +505,33 @@ export class MainScene extends Phaser.Scene {
   }
 
   private isCellFree(point: { x: number; y: number }): boolean {
-    return !this.snake.some((segment) => samePoint(segment, point)) && !this.foods.some((food) => samePoint(food, point));
+    return !this.snake.some((segment) => samePoint(segment, point)) && !this.foods.some((food) => samePoint(food, point)) && !this.arrows.some((arrow) => samePoint(arrow, point));
+  }
+
+  private canPlaceArrow(arrow: Arrow): boolean {
+    if (!this.isCellFree(arrow)) return false;
+    const head = this.snake[0];
+    const dx = Math.abs(arrow.x - head.x);
+    const dy = Math.abs(arrow.y - head.y);
+    if (dx + dy <= 1) return arrow.direction === this.direction;
+    return true;
+  }
+
+  private findArrowInFront(): Arrow | undefined {
+    const head = this.snake[0];
+    const vector = DIRECTIONS[this.direction];
+    let point = { x: head.x, y: head.y };
+
+    for (let steps = 0; steps < GAME_CONFIG.boardSize - 1; steps += 1) {
+      point = { x: point.x + vector.x, y: point.y + vector.y };
+      if (this.mode.id === 'endless') point = this.wrapPoint(point);
+      else if (this.isWallHit(point)) return undefined;
+
+      const arrow = this.arrows.find((candidate) => samePoint(candidate, point));
+      if (arrow) return arrow;
+    }
+
+    return undefined;
   }
 
   private isWallHit(point: { x: number; y: number }): boolean {
@@ -456,6 +550,7 @@ export class MainScene extends Phaser.Scene {
     if (this.justDown(this.cursors?.right) || this.justDown(this.keys?.D)) this.setDirection('right');
     if (this.justDown(this.cursors?.up) || this.justDown(this.keys?.W)) this.setDirection('up');
     if (this.justDown(this.cursors?.down) || this.justDown(this.keys?.S)) this.setDirection('down');
+    if (this.justDown(this.keys?.Q)) this.fireSkill();
     if (this.justDown(this.keys?.SPACE)) this.togglePause();
   }
 
@@ -515,7 +610,85 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.foods.forEach((food) => this.drawFood(food, radius));
+    this.arrows.forEach((arrow) => this.drawArrow(arrow, radius));
     this.snake.forEach((segment, index) => this.drawSegment(segment, index, radius));
+  }
+
+  private drawArrow(arrow: Arrow, radius: number): void {
+    if (!this.graphics) return;
+    const rect = this.cellRect(arrow.x, arrow.y, 0.16);
+    const isAligned = arrow.direction === this.direction;
+    this.graphics.fillStyle(0x2b1710, 1);
+    this.graphics.fillRoundedRect(rect.x - 2, rect.y - 2, rect.size + 4, rect.size + 4, radius);
+    this.graphics.fillStyle(isAligned ? 0x9ce56a : 0xff7a5f, 1);
+    this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
+    this.graphics.lineStyle(3, 0x2d170d, 1);
+
+    const centerX = rect.x + rect.size / 2;
+    const centerY = rect.y + rect.size / 2;
+    const shaft = rect.size * 0.24;
+    const head = rect.size * 0.32;
+    const base = rect.size * 0.12;
+
+    this.graphics.fillStyle(0xfff8d9, 1);
+    this.graphics.beginPath();
+    if (arrow.direction === 'right') {
+      this.graphics.moveTo(centerX - head, centerY - shaft);
+      this.graphics.lineTo(centerX, centerY - shaft);
+      this.graphics.lineTo(centerX, centerY - head);
+      this.graphics.lineTo(centerX + head, centerY);
+      this.graphics.lineTo(centerX, centerY + head);
+      this.graphics.lineTo(centerX, centerY + shaft);
+      this.graphics.lineTo(centerX - head, centerY + shaft);
+      this.graphics.lineTo(centerX - head, centerY + base);
+      this.graphics.lineTo(centerX - rect.size * 0.28, centerY + base);
+      this.graphics.lineTo(centerX - rect.size * 0.28, centerY - base);
+      this.graphics.lineTo(centerX - head, centerY - base);
+    } else if (arrow.direction === 'left') {
+      this.graphics.moveTo(centerX + head, centerY - shaft);
+      this.graphics.lineTo(centerX, centerY - shaft);
+      this.graphics.lineTo(centerX, centerY - head);
+      this.graphics.lineTo(centerX - head, centerY);
+      this.graphics.lineTo(centerX, centerY + head);
+      this.graphics.lineTo(centerX, centerY + shaft);
+      this.graphics.lineTo(centerX + head, centerY + shaft);
+      this.graphics.lineTo(centerX + head, centerY + base);
+      this.graphics.lineTo(centerX + rect.size * 0.28, centerY + base);
+      this.graphics.lineTo(centerX + rect.size * 0.28, centerY - base);
+      this.graphics.lineTo(centerX + head, centerY - base);
+    } else if (arrow.direction === 'up') {
+      this.graphics.moveTo(centerX - shaft, centerY + head);
+      this.graphics.lineTo(centerX - shaft, centerY);
+      this.graphics.lineTo(centerX - head, centerY);
+      this.graphics.lineTo(centerX, centerY - head);
+      this.graphics.lineTo(centerX + head, centerY);
+      this.graphics.lineTo(centerX + shaft, centerY);
+      this.graphics.lineTo(centerX + shaft, centerY + head);
+      this.graphics.lineTo(centerX + base, centerY + head);
+      this.graphics.lineTo(centerX + base, centerY + rect.size * 0.28);
+      this.graphics.lineTo(centerX - base, centerY + rect.size * 0.28);
+      this.graphics.lineTo(centerX - base, centerY + head);
+    } else {
+      this.graphics.moveTo(centerX - shaft, centerY - head);
+      this.graphics.lineTo(centerX - shaft, centerY);
+      this.graphics.lineTo(centerX - head, centerY);
+      this.graphics.lineTo(centerX, centerY + head);
+      this.graphics.lineTo(centerX + head, centerY);
+      this.graphics.lineTo(centerX + shaft, centerY);
+      this.graphics.lineTo(centerX + shaft, centerY - head);
+      this.graphics.lineTo(centerX + base, centerY - head);
+      this.graphics.lineTo(centerX + base, centerY - rect.size * 0.28);
+      this.graphics.lineTo(centerX - base, centerY - rect.size * 0.28);
+      this.graphics.lineTo(centerX - base, centerY - head);
+    }
+    this.graphics.closePath();
+    this.graphics.fillPath();
+
+    if (isAligned) {
+      const pulse = 0.35 + Math.sin(this.time.now / 140) * 0.2;
+      this.graphics.lineStyle(4, 0xffffff, pulse);
+      this.graphics.strokeRoundedRect(rect.x - 4, rect.y - 4, rect.size + 8, rect.size + 8, radius);
+    }
   }
 
   private drawFood(food: Food, radius: number): void {
@@ -646,9 +819,16 @@ export class MainScene extends Phaser.Scene {
       bestCombo: getBestCombo(),
       isDanger: this.isDangerLength(),
       isSlowed: this.time.now < this.slowUntil,
+      arrowsCleared: this.arrowsCleared,
+      skillCooldownRemainingMs: this.getSkillCooldownRemainingMs(),
+      skillReady: this.getSkillCooldownRemainingMs() === 0,
       objectiveCompleted: this.objectiveCompleted,
       status: this.status,
     });
+  }
+
+  private getSkillCooldownRemainingMs(): number {
+    return Math.max(0, this.skillCooldownUntil - this.time.now);
   }
 
   private getSurvivalSeconds(): number {
@@ -737,6 +917,38 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  private spawnArrowBreakEffect(arrow: Arrow, fromSkill: boolean): void {
+    const center = this.cellCenter(arrow.x, arrow.y);
+    const effect = this.add.graphics({ x: center.x, y: center.y });
+    const color = fromSkill ? 0x9df7ff : 0xfff06a;
+    effect.lineStyle(4, color, 0.95);
+    effect.strokeCircle(0, 0, Math.max(10, this.cellSize * 0.26));
+    this.tweens.add({
+      targets: effect,
+      scale: fromSkill ? 1.75 : 1.4,
+      alpha: 0,
+      duration: fromSkill ? 260 : 180,
+      ease: 'Quad.easeOut',
+      onComplete: () => effect.destroy(),
+    });
+  }
+
+  private spawnSkillEffect(target: Arrow): void {
+    const head = this.cellCenter(this.snake[0].x, this.snake[0].y);
+    const destination = this.cellCenter(target.x, target.y);
+    const beam = this.add.graphics();
+    beam.lineStyle(Math.max(4, this.cellSize * 0.14), 0x9df7ff, 0.9);
+    beam.lineBetween(head.x, head.y, destination.x, destination.y);
+    this.spawnArrowBreakEffect(target, true);
+    this.tweens.add({
+      targets: beam,
+      alpha: 0,
+      duration: 180,
+      ease: 'Quad.easeOut',
+      onComplete: () => beam.destroy(),
+    });
+  }
+
   private spawnEliminateParticles(segments: Segment[]): void {
     segments.forEach((segment) => {
       const center = this.cellCenter(segment.x, segment.y);
@@ -788,6 +1000,9 @@ export class MainScene extends Phaser.Scene {
       bestCombo: getBestCombo(),
       isDanger: this.isDangerLength(),
       isSlowed: this.time.now < this.slowUntil,
+      arrowsCleared: this.arrowsCleared,
+      skillCooldownRemainingMs: this.getSkillCooldownRemainingMs(),
+      skillReady: this.getSkillCooldownRemainingMs() === 0,
       objectiveCompleted,
       status: this.status,
       finalLength: this.snake.length,

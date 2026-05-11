@@ -30,11 +30,14 @@ const initialSnapshot: GameSnapshot = {
   bestCombo: getBestCombo(),
   isDanger: false,
   isSlowed: false,
+  arrowsCleared: 0,
+  skillCooldownRemainingMs: 0,
+  skillReady: true,
   objectiveCompleted: false,
   status: 'ready',
 };
 
-type Command = Direction | 'pause' | 'restart' | 'start';
+type Command = Direction | 'pause' | 'restart' | 'start' | 'skill';
 
 export function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot>(initialSnapshot);
@@ -106,7 +109,7 @@ export function App() {
           <div>
             <p className="eyebrow">纯前端试玩版</p>
             <h1>消消蛇</h1>
-            <p className="subtitle">吃色块会变长，连续吃到 3 个同色就会消掉尾巴。</p>
+            <p className="subtitle">吃色块会变长，尾巴三连会消除；箭头只有同向可吃，按 Q 可清前方箭头。</p>
           </div>
           <div className="hero-actions">
             <button className="pill-button" onClick={toggleSfx} type="button">音效：{settings.sfxEnabled ? '开' : '关'}</button>
@@ -140,12 +143,15 @@ export function App() {
               <div className="metric"><span>长度</span><strong>{snapshot.length}</strong></div>
               <div className="metric"><span>Combo</span><strong>x{Math.max(1, snapshot.combo)}</strong></div>
               <div className="metric"><span>消除</span><strong>{snapshot.eliminated}</strong></div>
+              <div className="metric"><span>清箭</span><strong>{snapshot.arrowsCleared}</strong></div>
               <div className="metric"><span>{snapshot.remainingSeconds !== undefined ? '剩余' : '时间'}</span><strong>{snapshot.remainingSeconds !== undefined ? `${snapshot.remainingSeconds}s` : `${snapshot.survivalSeconds}s`}</strong></div>
               {snapshot.stepsLeft !== undefined && <div className="metric"><span>步数</span><strong>{snapshot.stepsLeft}</strong></div>}
+              <div className={`metric ${snapshot.skillReady ? 'skill-ready' : 'skill-cooldown'}`}><span>Q 技能</span><strong>{snapshot.skillReady ? '就绪' : `${Math.ceil(snapshot.skillCooldownRemainingMs / 1000)}s`}</strong></div>
               <div className="records inline"><span>最高 {snapshot.bestScore}</span><span>最长 {snapshot.bestSurvivalSeconds}s</span></div>
               <div className="controls-row inline-controls">
                 {snapshot.status === 'ready' ? <button onClick={() => issueCommand('start')} type="button">开始</button> : <button onClick={() => issueCommand('pause')} type="button">{snapshot.status === 'paused' ? '继续' : '暂停'}</button>}
                 <button onClick={restart} type="button">重开</button>
+                <button onClick={() => issueCommand('skill')} type="button">Q 技能</button>
                 <button onClick={() => setShowGuide(true)} type="button">教程</button>
               </div>
             </div>
@@ -163,7 +169,7 @@ export function App() {
               )}
               {snapshot.status === 'paused' && <div className="overlay">已暂停</div>}
               {showGuide && (
-                <div className="overlay guide-card"><p>玩法示例</p><div className="demo-chain" aria-label="红绿红红红示例"><span className="demo-dot red" /><span className="demo-dot green" /><span className="demo-dot red" /><span className="demo-dot red pop" /><span className="demo-dot red pop" /></div><span>吃到的颜色会进入蛇尾。尾巴最后 3 节同色，就会一起消除。</span><button onClick={() => setShowGuide(false)} type="button">明白了</button></div>
+                <div className="overlay guide-card"><p>玩法示例</p><div className="demo-chain" aria-label="红绿红红红示例"><span className="demo-dot red" /><span className="demo-dot green" /><span className="demo-dot red" /><span className="demo-dot red pop" /><span className="demo-dot red pop" /></div><span>吃到的颜色会进入蛇尾。尾巴最后 3 节同色，就会一起消除。</span><span>箭头只有完全同向才能吃掉，其他三个方向撞上都会死。按 `Q` 能清前方第一个箭头。</span><button onClick={() => setShowGuide(false)} type="button">明白了</button></div>
               )}
               {result && (
                 <div className="overlay result-card"><p>{result.objectiveCompleted ? '目标完成' : '本局结束'}</p><strong>{result.score}</strong><span>长度 {result.finalLength} · Combo x{Math.max(1, result.maxCombo)} · 消除 {result.eliminated} 节</span><button onClick={restart} type="button">再来一局</button></div>
@@ -175,6 +181,7 @@ export function App() {
             <aside className="virtual-pad panel" aria-label="移动端方向键">
               <button className="up" onClick={() => issueCommand('up')} type="button">上</button>
               <button className="left" onClick={() => issueCommand('left')} type="button">左</button>
+              <button className="skill" onClick={() => issueCommand('skill')} type="button">Q</button>
               <button className="right" onClick={() => issueCommand('right')} type="button">右</button>
               <button className="down" onClick={() => issueCommand('down')} type="button">下</button>
             </aside>
@@ -217,7 +224,9 @@ function getModeProgress(snapshot: GameSnapshot): { label: string; value: string
 function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string | null {
   if (tutorialDone || snapshot.status === 'gameover') return null;
   if (snapshot.eaten === 0) return '吃到色块后，蛇尾会长出对应颜色。';
+  if (snapshot.arrowsCleared === 0 && snapshot.survivalSeconds < 12) return '箭头只有完全同向才能吃掉，不同方向撞上会立刻死亡。';
   if (snapshot.eaten < 3) return '观察尾巴颜色，最后 3 节同色才会消除。';
+  if (!snapshot.skillReady) return 'Q 技能正在冷却，会清掉正前方路径上的第一个箭头。';
   if (snapshot.eliminated === 0) return '尾巴已有两节同色时，再吃同色就能消掉尾巴。';
   return null;
 }
@@ -232,9 +241,9 @@ function playSound(type: GameEvent['type']): void {
   const oscillator = audioContext.createOscillator();
   const gain = audioContext.createGain();
   const now = audioContext.currentTime;
-  const frequency = type === 'eat' ? 520 : type === 'eliminate' ? 820 : type === 'powerup' ? 660 : 180;
-  const duration = type === 'eliminate' ? 0.14 : 0.08;
-  oscillator.type = type === 'gameover' ? 'sawtooth' : 'square';
+  const frequency = type === 'eat' ? 520 : type === 'eliminate' ? 820 : type === 'powerup' ? 660 : type === 'arrow-eat' ? 430 : type === 'skill-fire' ? 710 : 180;
+  const duration = type === 'eliminate' ? 0.14 : type === 'skill-fire' ? 0.12 : 0.08;
+  oscillator.type = type === 'gameover' ? 'sawtooth' : type === 'skill-fire' ? 'triangle' : 'square';
   oscillator.frequency.setValueAtTime(frequency, now);
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.08, now + 0.01);

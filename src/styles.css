@@ -108,7 +108,7 @@ h1 {
 }
 .top-hud {
   display: grid;
-  grid-template-columns: minmax(94px, 1fr) repeat(5, minmax(54px, 0.58fr)) minmax(64px, 0.7fr) minmax(164px, auto);
+  grid-template-columns: minmax(94px, 1fr) repeat(6, minmax(54px, 0.58fr)) minmax(74px, 0.8fr) minmax(64px, 0.7fr) minmax(220px, auto);
   gap: 6px;
   align-items: stretch;
 }
@@ -121,8 +121,10 @@ h1 {
 .metric span { display: block; font-size: 0.66rem; font-weight: 900; opacity: 0.72; }
 .metric strong { display: block; font-size: 0.98rem; line-height: 1; }
 .metric.primary strong { font-size: 1.42rem; }
+.metric.skill-ready { background: #d9ff92; }
+.metric.skill-cooldown { background: #ffe7b4; }
 .records.inline { display: grid; align-content: center; gap: 2px; }
-.controls-row { display: grid; grid-template-columns: repeat(3, minmax(48px, 1fr)); gap: 5px; min-width: 164px; }
+.controls-row { display: grid; grid-template-columns: repeat(4, minmax(48px, 1fr)); gap: 5px; min-width: 220px; }
 .controls-row button { min-width: 48px; padding: 4px 7px; font-size: 0.76rem; white-space: nowrap; writing-mode: horizontal-tb; }
 .status-strip { grid-row: 2; display: flex; gap: 12px; justify-content: center; background: #ffdf7a; }
 .game-wrap { grid-row: 3; position: relative; min-height: 0; height: 100%; overflow: hidden; border: 3px solid var(--ink); border-radius: 20px; background: #f3a034; }
@@ -205,7 +207,7 @@ h1 {
   .game-wrap, .game-canvas { min-height: min(72dvh, calc(100vw - 28px)); }
   .virtual-pad {
     display: grid;
-    grid-template-areas: ". up ." "left . right" ". down .";
+    grid-template-areas: ". up ." "left skill right" ". down .";
     grid-template-columns: 1fr 1fr 1fr;
     grid-template-rows: 1fr 1fr 1fr;
     gap: 6px;
@@ -220,6 +222,7 @@ h1 {
   .virtual-pad .left { grid-area: left; }
   .virtual-pad .right { grid-area: right; }
   .virtual-pad .down { grid-area: down; }
+  .virtual-pad .skill { grid-area: skill; background: var(--mint); }
 }
 
 @media (max-width: 640px) {

@@ -10,7 +10,7 @@ type GameCanvasProps = {
   onEvent: (event: GameEvent) => void;
   screenShakeEnabled: boolean;
   mode: GameModeId;
-  command: { type: Direction | 'pause' | 'restart' | 'start'; id: number } | null;
+  command: { type: Direction | 'pause' | 'restart' | 'start' | 'skill'; id: number } | null;
 };
 
 export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled, mode, command }: GameCanvasProps) {
@@ -91,6 +91,11 @@ export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled
 
     if (command.type === 'start') {
       scene.startGame();
+      return;
+    }
+
+    if (command.type === 'skill') {
+      scene.fireSkill();
       return;
     }
 
