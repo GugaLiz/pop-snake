@@ -68,10 +68,17 @@ export type GameSnapshot = {
   puzzleOptimalSteps?: number;
   puzzleStepDelta?: number;
   comboRewardText?: string;
+  directionColorCurrentLabel?: string;
+  directionColorNextLabel?: string;
   rushSkillReady?: boolean;
   rushSkillCooldownSeconds?: number;
   rushClearedObstacles?: number;
   rushSkillUses?: number;
+  rushCoresCollected?: number;
+  rushRequiredCores?: number;
+  rushWave?: number;
+  rushBestLineClear?: number;
+  rushImbueLabel?: string;
   resumeCountdownSeconds?: number;
   resumeCountdownProgress?: number;
   upgradeCharge?: number;

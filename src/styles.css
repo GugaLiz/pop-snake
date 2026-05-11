@@ -450,7 +450,9 @@ h1 {
   font-weight: 900;
 }
 .controls-row { display: grid; grid-template-columns: repeat(3, minmax(48px, 1fr)); gap: 5px; min-width: 164px; }
+.controls-row.rush-controls { grid-template-columns: repeat(4, minmax(48px, 1fr)); min-width: 217px; }
 .controls-row button { min-width: 48px; padding: 4px 7px; font-size: 0.76rem; white-space: nowrap; writing-mode: horizontal-tb; }
+.controls-row .reserved-control { visibility: hidden; pointer-events: none; }
 .status-strip {
   grid-row: 2;
   display: flex;
@@ -712,6 +714,7 @@ h1 {
 .demo-dot.red { background: var(--pink); }
 .demo-dot.green { background: var(--green); }
 .demo-dot.yellow { background: var(--yellow); }
+.demo-dot.mint { background: var(--mint); }
 .demo-dot.pop { outline: 4px solid #fff2bd; }
 .virtual-pad { display: none; }
 

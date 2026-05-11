@@ -7,6 +7,7 @@ const SETTINGS_KEY = 'pop_snake_settings';
 const TUTORIAL_COMPLETED_KEY = 'pop_snake_tutorial_completed';
 const DAILY_CHALLENGE_PREFIX = 'pop_snake_daily_challenge_';
 const STICKER_COLLECTION_KEY = 'pop_snake_sticker_collection';
+const DAILY_STREAK_KEY = 'pop_snake_daily_streak';
 
 export type PlayerSettings = {
   sfxEnabled: boolean;
@@ -19,7 +20,13 @@ export type DailyChallengeStatus = {
   bestScore: number;
 };
 
-export type StickerId = 'balance_day' | 'rainbow_day' | 'bomb_day' | 'combo_day';
+export type DailyStreakStatus = {
+  currentStreak: number;
+  bestStreak: number;
+  lastCompletedKey?: string;
+};
+
+export type StickerId = 'balance_day' | 'rainbow_day' | 'bomb_day' | 'combo_day' | 'double_day' | 'pressure_day';
 
 export type StickerDefinition = {
   id: StickerId;
@@ -32,6 +39,8 @@ const STICKER_DEFINITIONS: StickerDefinition[] = [
   { id: 'rainbow_day', name: '彩虹日贴纸', shortLabel: '彩虹' },
   { id: 'bomb_day', name: '炸弹日贴纸', shortLabel: '炸弹' },
   { id: 'combo_day', name: '热手日贴纸', shortLabel: '热手' },
+  { id: 'double_day', name: '双倍日贴纸', shortLabel: '双倍' },
+  { id: 'pressure_day', name: '低容错日贴纸', shortLabel: '低容错' },
 ];
 
 const defaultSettings: PlayerSettings = {
@@ -110,6 +119,39 @@ export function getDailyChallengeStatus(challengeKey: string): DailyChallengeSta
   }
 }
 
+export function getDailyStreakStatus(): DailyStreakStatus {
+  const raw = window.localStorage.getItem(DAILY_STREAK_KEY);
+  if (!raw) return { currentStreak: 0, bestStreak: 0 };
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<DailyStreakStatus>;
+    return {
+      currentStreak: typeof parsed.currentStreak === 'number' ? parsed.currentStreak : 0,
+      bestStreak: typeof parsed.bestStreak === 'number' ? parsed.bestStreak : 0,
+      lastCompletedKey: typeof parsed.lastCompletedKey === 'string' ? parsed.lastCompletedKey : undefined,
+    };
+  } catch {
+    return { currentStreak: 0, bestStreak: 0 };
+  }
+}
+
+export function saveDailyStreakCompletion(challengeKey: string): DailyStreakStatus {
+  const previous = getDailyStreakStatus();
+  if (previous.lastCompletedKey === challengeKey) return previous;
+
+  const yesterdayKey = getRelativeDateKey(challengeKey, -1);
+  const continued = previous.lastCompletedKey === yesterdayKey;
+  const currentStreak = continued ? previous.currentStreak + 1 : 1;
+  const next = {
+    currentStreak,
+    bestStreak: Math.max(previous.bestStreak, currentStreak),
+    lastCompletedKey: challengeKey,
+  };
+
+  window.localStorage.setItem(DAILY_STREAK_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function saveDailyChallengeStatus(challengeKey: string, score: number, completed: boolean): DailyChallengeStatus {
   const previous = getDailyChallengeStatus(challengeKey);
   const next = {
@@ -117,6 +159,7 @@ export function saveDailyChallengeStatus(challengeKey: string, score: number, co
     bestScore: Math.max(previous.bestScore, score),
   };
   window.localStorage.setItem(`${DAILY_CHALLENGE_PREFIX}${challengeKey}`, JSON.stringify(next));
+  if (completed) saveDailyStreakCompletion(challengeKey);
   return next;
 }
 
@@ -158,4 +201,13 @@ export function saveResult(result: GameResult): number {
   window.localStorage.setItem(BEST_COMBO_KEY, String(bestCombo));
 
   return bestScore;
+}
+
+function getRelativeDateKey(sourceKey: string, offsetDays: number): string {
+  const [year, month, day] = sourceKey.split('-').map(Number);
+  const date = new Date(year, month - 1, day + offsetDays);
+  const nextYear = date.getFullYear();
+  const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+  const nextDay = String(date.getDate()).padStart(2, '0');
+  return `${nextYear}-${nextMonth}-${nextDay}`;
 }

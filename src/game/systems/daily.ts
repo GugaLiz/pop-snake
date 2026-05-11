@@ -26,7 +26,7 @@ export function createDailyChallenge(
   hashSeed: (source: string) => number,
 ): DailyChallengeConfig {
   const seed = hashSeed(`daily-${key}`);
-  const variant = seed % 4;
+  const variant = seed % 6;
 
   if (variant === 0) {
     return {
@@ -73,16 +73,46 @@ export function createDailyChallenge(
     };
   }
 
+  if (variant === 3) {
+    return {
+      key,
+      title: '热手日',
+      description: 'Combo 窗口更长，连消返时更强。',
+      timeLimitSeconds: 78,
+      targetScore: 1750,
+      stickerId: 'combo_day',
+      stickerName: '热手日贴纸',
+      modifiers: { comboWindowBonusMs: 900, extraSecondsPerEliminate: 1 },
+      missionOffset: 6,
+      specialSpawnBonus: 0,
+    };
+  }
+
+  if (variant === 4) {
+    return {
+      key,
+      title: '双倍日',
+      description: '三消得分翻倍，适合追求一次漂亮爆分。',
+      timeLimitSeconds: 72,
+      targetScore: 2100,
+      stickerId: 'double_day',
+      stickerName: '双倍日贴纸',
+      modifiers: { eliminateScoreMultiplier: 2 },
+      missionOffset: 1,
+      specialSpawnBonus: 0.01,
+    };
+  }
+
   return {
     key,
-    title: '热手日',
-    description: 'Combo 窗口更长，连消返时更强。',
-    timeLimitSeconds: 78,
-    targetScore: 1750,
-    stickerId: 'combo_day',
-    stickerName: '热手日贴纸',
-    modifiers: { comboWindowBonusMs: 900, extraSecondsPerEliminate: 1 },
-    missionOffset: 6,
-    specialSpawnBonus: 0,
+    title: '低容错日',
+    description: '时间更短、目标更紧，靠稳定三消把节奏续住。',
+    timeLimitSeconds: 62,
+    targetScore: 1550,
+    stickerId: 'pressure_day',
+    stickerName: '低容错日贴纸',
+    modifiers: { extraSecondsPerEliminate: 2, targetWeightBonus: 0.08 },
+    missionOffset: 3,
+    specialSpawnBonus: -0.01,
   };
 }

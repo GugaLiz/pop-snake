@@ -32,7 +32,7 @@ export const BASIC_COLOR_IDS = ['sun', 'leaf', 'mint', 'berry'] as const;
 export type SnakeColor = (typeof GAME_COLORS)[number]['id'];
 export type BasicSnakeColor = (typeof BASIC_COLOR_IDS)[number];
 export type FoodType = 'normal' | 'bomb' | 'rainbow' | 'slow';
-export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush';
+export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush' | 'direction-color';
 
 export type GameModeConfig = {
   id: GameModeId;
@@ -98,10 +98,17 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   },
   rush: {
     id: 'rush',
-    name: '箭蛇冲刺',
-    description: '45 秒冲刺开路，主动技能直线清障。',
+    name: '箭蛇破阵',
+    description: '射击击穿核心围墙，冲进核心，三消会给下一次射击附魔。',
     timeLimitSeconds: 45,
-    targetScore: 1200,
+    targetScore: 1800,
+  },
+  'direction-color': {
+    id: 'direction-color',
+    name: '方向染色',
+    description: '蛇头按固定色序循环，只能吃同色食物。',
+    timeLimitSeconds: 75,
+    targetScore: 1600,
   },
 };
 
