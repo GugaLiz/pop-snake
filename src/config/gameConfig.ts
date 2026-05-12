@@ -111,7 +111,7 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   rush: {
     id: 'rush',
     name: '箭蛇破阵',
-    description: '射击击穿核心围墙，冲进核心，三消会给下一次射击附魔。',
+    description: '三消装颜色子弹，射穿同色围墙，吃核心续命。',
     timeLimitSeconds: 45,
     targetScore: 1800,
   },
@@ -132,8 +132,8 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   brawl: {
     id: 'brawl',
     name: '大乱斗',
-    description: '随机连续闯冲刺、解谜、破阵和染色小关，适合比赛展示。',
-    timeLimitSeconds: 120,
+    description: '按递进顺序连续闯完整玩法小关，适合比赛展示。',
+    timeLimitSeconds: 180,
     targetScore: 2200,
   },
 };

@@ -1,6 +1,5 @@
 ﻿import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { GAME_CONFIG, GAME_MODES, type GameModeId } from '../config/gameConfig';
-import { V3_BALANCE } from '../config/balance';
 import { GameCanvas } from './GameCanvas';
 import type { Direction, GameEvent, GameResult, GameSnapshot } from '../game/types';
 import { getDirectionColorGuideText } from '../game/modes/directionColorRules';
@@ -22,8 +21,8 @@ import {
 const DESKTOP_STAGE = { width: 1180, height: 900 } as const;
 
 const initialSnapshot: GameSnapshot = {
-  mode: 'sprint',
-  objectiveText: '目标：90 秒内冲更高分，三消可以返时并解锁强化',
+  mode: 'brawl',
+  objectiveText: '目标：连续闯 11 段递进小关，完整展示全部玩法',
   dailyChallengeText: undefined,
   score: 0,
   length: 3,
@@ -63,16 +62,20 @@ const MODE_LABELS: Record<GameModeId, { tone: Tone; tag: string }> = {
   brawl: { tone: 'mythic', tag: '乱斗' },
 };
 
-const PRIMARY_MODES: GameModeId[] = ['sprint', 'daily', 'brawl'];
-const BRANCH_MODES: GameModeId[] = ['puzzle', 'rush', 'direction-color', 'timed-color'];
-const MORE_MODES: GameModeId[] = ['endless', 'precision', 'standard', 'timed', 'steps'];
+const FEATURED_MODE: GameModeId = 'brawl';
+const MODE_GROUPS: Array<{ id: string; title: string; modes: GameModeId[] }> = [
+  { id: 'tail', title: '蛇尾与日常', modes: ['sprint', 'daily'] },
+  { id: 'route', title: '解谜与破阵', modes: ['puzzle', 'rush'] },
+  { id: 'color', title: '颜色规则', modes: ['direction-color', 'timed-color'] },
+  { id: 'classic', title: '经典规则', modes: ['standard', 'endless', 'timed', 'steps', 'precision'] },
+];
 
 const COLOR_MODES: GameModeId[] = ['direction-color', 'timed-color'];
 
 export function App() {
   const stickerDefinitions = getStickerDefinitions();
   const [snapshot, setSnapshot] = useState<GameSnapshot>(initialSnapshot);
-  const [selectedMode, setSelectedMode] = useState<GameModeId>('sprint');
+  const [selectedMode, setSelectedMode] = useState<GameModeId>(FEATURED_MODE);
   const [result, setResult] = useState<GameResult | null>(null);
   const [settings, setSettings] = useState(getSettings);
   const [tutorialDone, setTutorialDone] = useState(hasTutorialCompleted);
@@ -81,7 +84,7 @@ export function App() {
   const [dailyStreak, setDailyStreak] = useState(getDailyStreakStatus);
   const [stickers, setStickers] = useState(getStickerCollection);
   const [selectedUpgradeIndex, setSelectedUpgradeIndex] = useState(0);
-  const [showMoreModes, setShowMoreModes] = useState(false);
+  const [expandedModeGroups, setExpandedModeGroups] = useState<Record<string, boolean>>({});
   const stageScale = useStageScale();
   const commandIdRef = useRef(0);
   const [command, setCommand] = useState<{ type: Command; id: number } | null>(null);
@@ -119,8 +122,9 @@ export function App() {
   }, [result]);
 
   useEffect(() => {
-    if (!MORE_MODES.includes(selectedMode)) return;
-    setShowMoreModes(true);
+    const activeGroup = MODE_GROUPS.find((group) => group.modes.includes(selectedMode));
+    if (!activeGroup) return;
+    setExpandedModeGroups((current) => current[activeGroup.id] ? current : { ...current, [activeGroup.id]: true });
   }, [selectedMode]);
 
   useEffect(() => {
@@ -178,6 +182,10 @@ export function App() {
     }
     setResult(null);
     setSelectedMode(mode);
+  };
+
+  const toggleModeGroup = (groupId: string) => {
+    setExpandedModeGroups((current) => ({ ...current, [groupId]: !current[groupId] }));
   };
 
   const toggleVirtualPad = () => {
@@ -384,52 +392,28 @@ export function App() {
         <section className="play-layout">
           <aside className="mode-bar panel">
             <div className="mode-section">
-              <strong className="side-title">主玩法</strong>
+              <strong className="side-title">展示入口</strong>
               <div className="mode-select">
-                {PRIMARY_MODES.map((modeId) => {
-                  const mode = GAME_MODES[modeId];
-                  return (
-                    <button className={`mode-button rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
-                      <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>
-                      <strong>{mode.name}</strong>
-                    </button>
-                  );
-                })}
+                {renderModeButton(FEATURED_MODE, selectedMode, changeMode)}
               </div>
             </div>
-            <div className="mode-section">
-              <strong className="side-title">玩法分支</strong>
-              <div className="mode-select">
-                {BRANCH_MODES.map((modeId) => {
-                  const mode = GAME_MODES[modeId];
-                  return (
-                    <button className={`mode-button rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
-                      <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>
-                      <strong>{mode.name}</strong>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="mode-section">
-              <button className={`more-modes-toggle${showMoreModes ? ' active' : ''}`} data-nav-button="true" onClick={() => setShowMoreModes((current) => !current)} type="button">
-                <span className="more-modes-label">更多玩法</span>
-                <strong className="more-modes-state">{showMoreModes ? '收起' : '展开'}</strong>
-              </button>
-              {showMoreModes && (
-                <div className="mode-select more-mode-select">
-                  {MORE_MODES.map((modeId) => {
-                    const mode = GAME_MODES[modeId];
-                    return (
-                      <button className={`mode-button rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
-                        <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>
-                        <strong>{mode.name}</strong>
-                      </button>
-                    );
-                  })}
+            {MODE_GROUPS.map((group) => {
+              const expanded = Boolean(expandedModeGroups[group.id]);
+              const hasActiveMode = group.modes.includes(selectedMode);
+              return (
+                <div className="mode-section" key={group.id}>
+                  <button className={`more-modes-toggle${expanded ? ' active' : ''}${hasActiveMode ? ' has-active' : ''}`} data-nav-button="true" onClick={() => toggleModeGroup(group.id)} type="button">
+                    <span className="more-modes-label">{group.title}</span>
+                    <strong className="more-modes-state">{expanded ? '收起' : '展开'}</strong>
+                  </button>
+                  {expanded && (
+                    <div className="mode-select grouped-mode-select">
+                      {group.modes.map((modeId) => renderModeButton(modeId, selectedMode, changeMode))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })}
             <div className={`current-mode-card rarity-${MODE_LABELS[selectedMode].tone}${result ? ' condensed' : ''}`}>
               <div className="current-mode-head">
                 <span className={`mode-tag rarity-${MODE_LABELS[selectedMode].tone}`}>{MODE_LABELS[selectedMode].tag}</span>
@@ -486,7 +470,7 @@ export function App() {
                       : selectedMode === 'rush'
                         ? `45 秒内破墙吃核心续命；三消装颜色子弹，同色一发击穿，异色三发破墙。`
                         : selectedMode === 'brawl'
-                          ? '连续随机闯 5 个小关，冲刺、解谜、破阵和染色会轮番出现。'
+                          ? '连续闯 11 段递进小关，完整展示标准、冲刺、解谜、染色、破阵、每日、限步、精准、限时和无尽。'
                         : selectedMode === 'direction-color'
                           ? `每次有效转向后按固定色序切换，只能吃同色食物：${getDirectionColorGuideText()}。`
                         : selectedMode === 'timed-color'
@@ -689,6 +673,20 @@ export function App() {
   );
 }
 
+function renderModeButton(
+  modeId: GameModeId,
+  selectedMode: GameModeId,
+  changeMode: (mode: GameModeId) => void,
+) {
+  const mode = GAME_MODES[modeId];
+  return (
+    <button className={`mode-button rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
+      <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>
+      <strong>{mode.name}</strong>
+    </button>
+  );
+}
+
 function renderGuideDemo(kind: ReturnType<typeof getModeGuide>['demo']) {
   if (kind === 'rush') {
     return (
@@ -849,11 +847,11 @@ function getCurrentModeSummary(
 
   if (mode === 'brawl') {
     return {
-      copy: '连续随机闯小关，快速展示冲刺、解谜、破阵和染色。',
+      copy: '全模式巡回赛，按递进顺序连续展示每种玩法。',
       pills: [
         `${snapshot.brawlStageLabel ?? '随机'} ${snapshot.brawlStageIndex ?? 1}/${snapshot.brawlStageCount ?? 5}`,
         `进度 ${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1}`,
-        `${snapshot.remainingSeconds ?? 120}s`,
+        `${snapshot.remainingSeconds ?? 180}s`,
       ],
     };
   }
@@ -950,7 +948,7 @@ function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string 
     return '吃核心会续命并刷新下一波，双核心时墙色一定不同。';
   }
   if (snapshot.mode === 'brawl') {
-    if (snapshot.status === 'ready') return '大乱斗会随机连续闯 5 个小关，完成目标后自动换关。';
+    if (snapshot.status === 'ready') return '大乱斗会连续闯 11 段递进小关，每关保留对应玩法特色。';
     return `${snapshot.brawlStageLabel ?? '随机'}小关：完成 ${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1} 后进入下一关。`;
   }
   if (snapshot.mode === 'direction-color') {

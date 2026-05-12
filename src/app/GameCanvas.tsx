@@ -31,6 +31,7 @@ export function GameCanvas({ onSnapshot, onGameOver, onEvent, screenShakeEnabled
     sceneRef.current = null;
 
     const scene = new MainScene();
+    scene.setMode(mode);
     scene.setCallbacks({ onSnapshot, onGameOver, onEvent });
     scene.setEffectSettings({ screenShakeEnabled });
     sceneRef.current = scene;

@@ -109,7 +109,18 @@ type EffectSettings = {
   screenShakeEnabled: boolean;
 };
 
-type BrawlStageType = 'sprint' | 'puzzle' | 'rush' | 'direction-color' | 'timed-color';
+type BrawlStageType =
+  | 'sprint'
+  | 'daily'
+  | 'standard'
+  | 'endless'
+  | 'timed'
+  | 'steps'
+  | 'precision'
+  | 'puzzle'
+  | 'rush'
+  | 'direction-color'
+  | 'timed-color';
 type RushCore = Point & { id: number; color: BasicSnakeColor };
 type RushObstacle = Point & { color: BasicSnakeColor; coreId: number };
 type RushBulletInventory = Record<BasicSnakeColor, number>;
@@ -117,11 +128,24 @@ type RushWallDamage = Record<string, { hits: number; color: BasicSnakeColor }>;
 
 const TIMED_COLOR_INTERVAL_MS = 5000;
 const TIMED_COLOR_FLASH_WARNING_MS = 1200;
+const BRAWL_STAGE_SEQUENCE: BrawlStageType[] = [
+  'standard',
+  'sprint',
+  'puzzle',
+  'direction-color',
+  'timed-color',
+  'rush',
+  'daily',
+  'steps',
+  'precision',
+  'timed',
+  'endless',
+];
 
 export class MainScene extends Phaser.Scene {
   private callbacks: GameCallbacks = {};
   private effectSettings: EffectSettings = { screenShakeEnabled: true };
-  private mode: GameModeConfig = GAME_MODES.sprint;
+  private mode: GameModeConfig = GAME_MODES.brawl;
   private snake: Segment[] = [];
   private foods: Food[] = [];
   private direction: Direction = 'right';
@@ -171,6 +195,7 @@ export class MainScene extends Phaser.Scene {
   private rushBestLineClear = 0;
   private rushSkillCooldownUntil = 0;
   private rushSkillUses = 0;
+  private rushIntroUntil = 0;
   private rushBullets: RushBulletInventory = this.createEmptyRushBullets();
   private rushWallDamage: RushWallDamage = {};
   private rushSameColorClears = 0;
@@ -184,6 +209,8 @@ export class MainScene extends Phaser.Scene {
   private brawlStageType: BrawlStageType = 'sprint';
   private brawlStageStartScore = 0;
   private brawlStageStartEaten = 0;
+  private brawlStageStartEliminated = 0;
+  private brawlStageStartSteps = 0;
   private brawlStageStartSeconds = 0;
   private brawlIntroUntil = 0;
   private brawlStageChallenge?: V4ChallengeLevel;
@@ -198,6 +225,15 @@ export class MainScene extends Phaser.Scene {
       leaf: 0,
       mint: 0,
       berry: 0,
+    };
+  }
+
+  private createStarterRushBullets(): RushBulletInventory {
+    return {
+      sun: 1,
+      leaf: 1,
+      mint: 1,
+      berry: 1,
     };
   }
 
@@ -258,6 +294,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   update(_: number, delta: number): void {
+    if (this.isRushRuleActive() && this.status === 'playing' && this.time.now < this.rushIntroUntil) {
+      this.publishSnapshot();
+      return;
+    }
+
     if (this.isBrawlMode() && this.status === 'playing' && this.time.now < this.brawlIntroUntil) {
       this.publishSnapshot();
       return;
@@ -295,6 +336,7 @@ export class MainScene extends Phaser.Scene {
     if (this.status !== 'ready') return;
     this.status = 'playing';
     this.startAt = this.time.now;
+    if (this.isRushRuleActive()) this.rushIntroUntil = this.time.now + 3000;
     this.callbacks.onEvent?.({ type: 'start' });
     this.publishSnapshot();
   }
@@ -304,6 +346,10 @@ export class MainScene extends Phaser.Scene {
     if (this.status === 'ready') this.startGame();
     if (this.isBrawlMode() && this.status === 'playing' && this.time.now < this.brawlIntroUntil) {
       this.brawlIntroUntil = 0;
+      this.publishSnapshot();
+    }
+    if (this.isRushRuleActive() && this.status === 'playing' && this.time.now < this.rushIntroUntil) {
+      this.rushIntroUntil = 0;
       this.publishSnapshot();
     }
     if (this.status === 'upgrade') return;
@@ -328,6 +374,10 @@ export class MainScene extends Phaser.Scene {
     if (this.status === 'ready') this.startGame();
     if (this.isBrawlMode() && this.status === 'playing' && this.time.now < this.brawlIntroUntil) {
       this.brawlIntroUntil = 0;
+      this.publishSnapshot();
+    }
+    if (this.isRushRuleActive() && this.status === 'playing' && this.time.now < this.rushIntroUntil) {
+      this.rushIntroUntil = 0;
       this.publishSnapshot();
     }
     if (this.status !== 'playing') return;
@@ -574,6 +624,7 @@ export class MainScene extends Phaser.Scene {
     this.rushBestLineClear = 0;
     this.rushSkillCooldownUntil = 0;
     this.rushSkillUses = 0;
+    this.rushIntroUntil = 0;
     this.rushBullets = this.createEmptyRushBullets();
     this.rushWallDamage = {};
     this.rushSameColorClears = 0;
@@ -587,6 +638,8 @@ export class MainScene extends Phaser.Scene {
     this.brawlStageType = 'sprint';
     this.brawlStageStartScore = 0;
     this.brawlStageStartEaten = 0;
+    this.brawlStageStartEliminated = 0;
+    this.brawlStageStartSteps = 0;
     this.brawlStageStartSeconds = 0;
     this.brawlIntroUntil = 0;
     this.brawlStageChallenge = undefined;
@@ -636,7 +689,7 @@ export class MainScene extends Phaser.Scene {
     this.missionStates = [];
     this.selectedUpgrades = [];
     this.upgradeChoices = [];
-    this.rushBullets = this.createEmptyRushBullets();
+    this.rushBullets = this.createStarterRushBullets();
     this.refillFoods();
     this.setupRushWave();
   }
@@ -645,19 +698,9 @@ export class MainScene extends Phaser.Scene {
     this.missionStates = [];
     this.selectedUpgrades = [];
     this.upgradeChoices = [];
-    const baseStages: BrawlStageType[] = ['sprint', 'puzzle', 'rush', 'direction-color', 'timed-color'];
-    this.brawlStages = this.shuffleBrawlStages(baseStages);
+    this.brawlStages = [...BRAWL_STAGE_SEQUENCE];
     this.brawlStageIndex = 0;
     this.setupBrawlStage();
-  }
-
-  private shuffleBrawlStages(stages: BrawlStageType[]): BrawlStageType[] {
-    const shuffled = [...stages];
-    for (let index = shuffled.length - 1; index > 0; index -= 1) {
-      const swapIndex = this.randomInt(0, index);
-      [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-    }
-    return shuffled;
   }
 
   private setupBrawlStage(): void {
@@ -668,6 +711,8 @@ export class MainScene extends Phaser.Scene {
     }
     this.brawlStageStartScore = this.score;
     this.brawlStageStartEaten = this.eaten;
+    this.brawlStageStartEliminated = this.eliminated;
+    this.brawlStageStartSteps = this.stepsUsed;
     this.brawlStageStartSeconds = this.getSurvivalSeconds();
     this.foods = [];
     this.puzzleTargetsCleared = 0;
@@ -679,7 +724,8 @@ export class MainScene extends Phaser.Scene {
     this.rushCoresCollected = 0;
     this.rushWave = 1;
     this.rushSkillCooldownUntil = 0;
-    this.rushBullets = this.createEmptyRushBullets();
+    this.rushIntroUntil = 0;
+    this.rushBullets = this.createStarterRushBullets();
     this.rushWallDamage = {};
     this.rushSameColorClears = 0;
     this.rushOffColorBreaks = 0;
@@ -695,6 +741,11 @@ export class MainScene extends Phaser.Scene {
       this.refillFoods();
       this.setupRushWave();
       return;
+    }
+    if (this.brawlStageType === 'daily') {
+      this.missionStates = this.createMissionStates().slice(0, 2);
+    } else {
+      this.missionStates = [];
     }
     this.refillFoods();
   }
@@ -1365,7 +1416,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (this.getBaseTimeLimitSeconds() && this.getRemainingSeconds() <= 0) {
-      this.finishGame(this.mode.id === 'rush' ? this.rushCoresCollected > 0 : false);
+      this.finishGame(false);
       return;
     }
 
@@ -1411,32 +1462,61 @@ export class MainScene extends Phaser.Scene {
 
   private hasCompletedBrawlStage(): boolean {
     if (!this.isBrawlMode()) return false;
+    const scoreGained = this.score - this.brawlStageStartScore;
+    const eatenGained = this.eaten - this.brawlStageStartEaten;
+    const eliminatedGained = this.eliminated - this.brawlStageStartEliminated;
+    const secondsGained = this.getSurvivalSeconds() - this.brawlStageStartSeconds;
     if (this.brawlStageType === 'sprint') {
-      return this.eaten - this.brawlStageStartEaten >= this.getBrawlStageTarget()
-        || this.score - this.brawlStageStartScore >= V3_BALANCE.brawl.stageScore;
+      return eatenGained >= this.getBrawlStageTarget()
+        || scoreGained >= V3_BALANCE.brawl.stageScore + this.brawlStageIndex * 40;
     }
+    if (this.brawlStageType === 'daily') return scoreGained >= this.getBrawlStageTarget();
+    if (this.brawlStageType === 'standard') return scoreGained >= this.getBrawlStageTarget();
+    if (this.brawlStageType === 'endless') return secondsGained >= this.getBrawlStageTarget();
+    if (this.brawlStageType === 'timed') return scoreGained >= this.getBrawlStageTarget();
+    if (this.brawlStageType === 'steps') return eliminatedGained >= this.getBrawlStageTarget();
+    if (this.brawlStageType === 'precision') return this.snake.length === this.getBrawlStageTarget() && this.stepsUsed > this.brawlStageStartSteps + 4;
     if (this.brawlStageType === 'puzzle') return this.countPuzzleTargetsLeft() === 0;
     if (this.brawlStageType === 'rush') return this.rushCoresCollected >= V3_BALANCE.brawl.rushRequiredCores;
-    return this.eaten - this.brawlStageStartEaten >= this.getBrawlStageTarget();
+    return eatenGained >= this.getBrawlStageTarget();
   }
 
   private getBrawlStageProgress(): number {
     if (!this.isBrawlMode()) return 0;
     if (this.brawlStageType === 'sprint') return Math.min(this.getBrawlStageTarget(), this.eaten - this.brawlStageStartEaten);
+    if (this.brawlStageType === 'daily') return Math.min(this.getBrawlStageTarget(), this.score - this.brawlStageStartScore);
+    if (this.brawlStageType === 'standard') return Math.min(this.getBrawlStageTarget(), this.score - this.brawlStageStartScore);
+    if (this.brawlStageType === 'endless') return Math.min(this.getBrawlStageTarget(), this.getSurvivalSeconds() - this.brawlStageStartSeconds);
+    if (this.brawlStageType === 'timed') return Math.min(this.getBrawlStageTarget(), this.score - this.brawlStageStartScore);
+    if (this.brawlStageType === 'steps') return Math.min(this.getBrawlStageTarget(), this.eliminated - this.brawlStageStartEliminated);
+    if (this.brawlStageType === 'precision') return Math.min(this.getBrawlStageTarget(), this.snake.length);
     if (this.brawlStageType === 'puzzle') return this.getBrawlStageTarget() - this.countPuzzleTargetsLeft();
     if (this.brawlStageType === 'rush') return this.rushCoresCollected;
     return Math.min(this.getBrawlStageTarget(), this.eaten - this.brawlStageStartEaten);
   }
 
   private getBrawlStageTarget(): number {
-    if (this.brawlStageType === 'sprint') return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.sprintEatTarget;
+    const tier = Math.max(0, this.brawlStageIndex);
+    if (this.brawlStageType === 'sprint') return (this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.sprintEatTarget) + Math.floor(tier / 4);
+    if (this.brawlStageType === 'daily') return V3_BALANCE.brawl.dailyScoreTarget + tier * 20;
+    if (this.brawlStageType === 'standard') return V3_BALANCE.brawl.standardScoreTarget + tier * 20;
+    if (this.brawlStageType === 'endless') return V3_BALANCE.brawl.endlessSurviveSeconds + Math.floor(tier / 2);
+    if (this.brawlStageType === 'timed') return V3_BALANCE.brawl.timedScoreTarget + tier * 25;
+    if (this.brawlStageType === 'steps') return V3_BALANCE.brawl.stepsEliminateTarget;
+    if (this.brawlStageType === 'precision') return V3_BALANCE.brawl.precisionTargetLength;
     if (this.brawlStageType === 'puzzle') return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.puzzleTargetCount;
     if (this.brawlStageType === 'rush') return V3_BALANCE.brawl.rushRequiredCores;
-    return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.colorEatTarget;
+    return (this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.colorEatTarget) + Math.floor(tier / 5);
   }
 
   private getBrawlStageLabel(stage: BrawlStageType = this.brawlStageType): string {
+    if (stage === 'standard') return '标准模式';
     if (stage === 'sprint') return '蛇尾消消乐';
+    if (stage === 'daily') return '每日挑战';
+    if (stage === 'endless') return '无尽模式';
+    if (stage === 'timed') return '限时模式';
+    if (stage === 'steps') return '限步模式';
+    if (stage === 'precision') return '精准模式';
     if (stage === 'puzzle') return '解谜';
     if (stage === 'rush') return '破阵';
     if (stage === 'direction-color') return '方向染色';
@@ -1444,19 +1524,31 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getBrawlStageTip(): string {
+    if (this.brawlStageType === 'standard') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 标准得分 ${this.getBrawlStageTarget()}`;
     if (this.brawlStageType === 'sprint') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · ${this.brawlStageChallenge?.tip ?? `吃 ${this.getBrawlStageTarget()} 个色块`}`;
     if (this.brawlStageType === 'puzzle') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · ${this.brawlStageChallenge?.tip ?? '按方向吃掉目标'}`;
-    if (this.brawlStageType === 'rush') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 射穿围墙吃核心`;
+    if (this.brawlStageType === 'rush') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 用颜色子弹破墙吃核心`;
     if (this.brawlStageType === 'direction-color') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 转向换色吃同色`;
-    return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 5 秒变色吃同色`;
+    if (this.brawlStageType === 'timed-color') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 5 秒变色吃同色`;
+    if (this.brawlStageType === 'daily') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 每日任务冲 ${this.getBrawlStageTarget()} 分`;
+    if (this.brawlStageType === 'steps') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 限步思路，完成 ${this.getBrawlStageTarget()} 次消除`;
+    if (this.brawlStageType === 'precision') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 控制蛇长到 ${this.getBrawlStageTarget()}`;
+    if (this.brawlStageType === 'timed') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 限时冲 ${this.getBrawlStageTarget()} 分`;
+    return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 生存 ${this.getBrawlStageTarget()} 秒`;
   }
 
   private getBrawlStageHint(stage: BrawlStageType = this.brawlStageType): string {
+    if (stage === 'standard') return `基础热身：有墙限制，拿到 ${this.getBrawlStageTarget()} 分进入下一关`;
     if (stage === 'sprint') return this.brawlStageChallenge?.tip ?? `吃 ${this.getBrawlStageTarget()} 个色块，尾巴三连可以加分返时`;
     if (stage === 'puzzle') return this.brawlStageChallenge?.tip ?? `按箭头方向吃掉 ${this.getBrawlStageTarget()} 个目标，方向错会失败`;
-    if (stage === 'rush') return '射击击穿核心围墙，然后冲进去吃核心';
+    if (stage === 'rush') return '三消装弹，用同色子弹击穿围墙，然后冲进去吃核心';
     if (stage === 'direction-color') return '每次有效转向都会换色，只能吃当前同色';
-    return '蛇头每 5 秒自动换色，提前找下一种颜色';
+    if (stage === 'timed-color') return '蛇头每 5 秒自动换色，提前找下一种颜色';
+    if (stage === 'daily') return '每日挑战段会带任务感，尽快拿分并保住节奏';
+    if (stage === 'steps') return '步数段更看重消除效率，每次三消都推进目标';
+    if (stage === 'precision') return '精准段不是越长越好，要把蛇长控到目标值';
+    if (stage === 'timed') return '限时段只看速度，优先吃近处食物冲分';
+    return '无尽段考验生存，撑过目标秒数即可进入终章';
   }
 
   private getDirectionBiasColor(): BasicSnakeColor | undefined {

@@ -154,6 +154,7 @@ h1 {
 }
 .mode-select { display: grid; grid-template-columns: 1fr; gap: 6px; }
 .more-mode-select { gap: 6px; }
+.grouped-mode-select { gap: 6px; padding-left: 6px; }
 .mode-teaser-list {
   display: grid;
   gap: 6px;
@@ -203,6 +204,10 @@ h1 {
 }
 .more-modes-toggle.active {
   transform: translateY(1px);
+}
+.more-modes-toggle.has-active {
+  background: #fff4c8;
+  box-shadow: inset 4px 0 0 currentColor;
 }
 .mode-button {
   display: grid;
