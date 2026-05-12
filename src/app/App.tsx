@@ -4,6 +4,7 @@ import { V3_BALANCE } from '../config/balance';
 import { GameCanvas } from './GameCanvas';
 import type { Direction, GameEvent, GameResult, GameSnapshot } from '../game/types';
 import { getDirectionColorGuideText } from '../game/modes/directionColorRules';
+import { getModeGuide } from '../game/guides/modeGuides';
 import {
   getDailyChallengeStatus,
   getDailyStreakStatus,
@@ -198,6 +199,7 @@ export function App() {
   };
 
   const tutorialText = getTutorialText(snapshot, tutorialDone);
+  const modeGuide = getModeGuide(selectedMode);
   const resumePercent = Math.max(0, Math.min(100, Math.round((snapshot.resumeCountdownProgress ?? 0) * 100)));
   const puzzleProgress = selectedMode === 'puzzle' ? parsePuzzleObjective(snapshot.objectiveText) : null;
   const rushSkillReady = Boolean(snapshot.rushSkillReady);
@@ -218,10 +220,13 @@ export function App() {
     snapshot.isSlowed ? '减速生效中' : null,
     isActiveRushMode && snapshot.status === 'playing'
       ? rushSkillReady
-          ? snapshot.rushImbueLabel
-          ? `射击已附魔：${snapshot.rushImbueLabel}`
-          : '射击已就绪，调整角度击穿核心围墙。'
+          ? snapshot.rushShotPreviewText
+          ? `射击：${snapshot.rushShotPreviewText}`
+          : '射击已就绪，先三消装弹再破墙。'
         : `射击冷却中 · ${rushCooldownText}`
+      : null,
+    isActiveRushMode && snapshot.status === 'playing' && snapshot.rushBulletInventoryText
+      ? `子弹 ${snapshot.rushBulletInventoryText}`
       : null,
     snapshot.comboRewardText ?? null,
   ].filter(Boolean) as string[];
@@ -443,8 +448,8 @@ export function App() {
             <div className="top-hud">
               <div className="metric primary"><span>分数</span><strong>{snapshot.score}</strong></div>
               <div className="metric"><span>长度</span><strong>{snapshot.length}</strong></div>
-              <div className={`metric${comboActive ? ' combo-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '目标' : selectedMode === 'brawl' ? '关卡' : isActiveRushMode ? '清障' : isActiveColorMode ? '当前' : 'Combo'}</span><strong>{selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.cleared}/${puzzleProgress.total}` : selectedMode === 'brawl' ? `${snapshot.brawlStageIndex ?? 1}/${snapshot.brawlStageCount ?? 5}` : isActiveRushMode ? `${snapshot.rushClearedObstacles ?? 0}` : isActiveColorMode ? `${snapshot.directionColorCurrentLabel ?? '粉'}` : `x${Math.max(1, snapshot.combo)}`}</strong></div>
-              <div className="metric"><span>{selectedMode === 'sprint' || selectedMode === 'daily' ? '强化' : selectedMode === 'puzzle' ? '关卡' : selectedMode === 'brawl' ? '进度' : isActiveRushMode ? '技能' : isActiveColorMode ? '下次' : '消除'}</span><strong>{selectedMode === 'sprint' || selectedMode === 'daily' ? snapshot.selectedUpgrades.length : selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.level}/${puzzleProgress.levelTotal}` : selectedMode === 'brawl' ? `${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1}` : isActiveRushMode ? snapshot.rushImbueLabel ? '附魔' : rushCooldownText : isActiveColorMode ? `${snapshot.directionColorNextLabel ?? '青'}` : snapshot.eliminated}</strong></div>
+              <div className={`metric${comboActive ? ' combo-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '目标' : selectedMode === 'brawl' ? '关卡' : isActiveRushMode ? '核心' : isActiveColorMode ? '当前' : 'Combo'}</span><strong>{selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.cleared}/${puzzleProgress.total}` : selectedMode === 'brawl' ? `${snapshot.brawlStageIndex ?? 1}/${snapshot.brawlStageCount ?? 5}` : isActiveRushMode ? `${snapshot.rushCoresCollected ?? 0}+${snapshot.rushWaveCoresLeft ?? 0}` : isActiveColorMode ? `${snapshot.directionColorCurrentLabel ?? '粉'}` : `x${Math.max(1, snapshot.combo)}`}</strong></div>
+              <div className="metric"><span>{selectedMode === 'sprint' || selectedMode === 'daily' ? '强化' : selectedMode === 'puzzle' ? '关卡' : selectedMode === 'brawl' ? '进度' : isActiveRushMode ? '子弹' : isActiveColorMode ? '下次' : '消除'}</span><strong>{selectedMode === 'sprint' || selectedMode === 'daily' ? snapshot.selectedUpgrades.length : selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.level}/${puzzleProgress.levelTotal}` : selectedMode === 'brawl' ? `${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1}` : isActiveRushMode ? snapshot.rushBulletInventoryText ?? '无弹' : isActiveColorMode ? `${snapshot.directionColorNextLabel ?? '青'}` : snapshot.eliminated}</strong></div>
               <div className={`metric${comboActive ? ' combo-time-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '步数' : snapshot.remainingSeconds !== undefined ? '剩余' : '时间'}</span><strong>{selectedMode === 'puzzle' ? `${snapshot.stepsUsed}步` : snapshot.remainingSeconds !== undefined ? `${snapshot.remainingSeconds}s` : `${snapshot.survivalSeconds}s`}</strong></div>
               {snapshot.stepsLeft !== undefined && <div className="metric"><span>步数</span><strong>{snapshot.stepsLeft}</strong></div>}
               <div className="records inline"><span>最高 {snapshot.bestScore}</span><span>最长 {snapshot.bestSurvivalSeconds}s</span></div>
@@ -479,7 +484,7 @@ export function App() {
                     {selectedMode === 'puzzle' && snapshot.dailyChallengeText
                       ? snapshot.dailyChallengeText
                       : selectedMode === 'rush'
-                        ? `射击击穿核心围墙，冲进去吃核心；三消会强化下一次射击。`
+                        ? `45 秒内破墙吃核心续命；三消装颜色子弹，同色一发击穿，异色三发破墙。`
                         : selectedMode === 'brawl'
                           ? '连续随机闯 5 个小关，冲刺、解谜、破阵和染色会轮番出现。'
                         : selectedMode === 'direction-color'
@@ -489,13 +494,16 @@ export function App() {
                         : GAME_MODES[selectedMode].description}
                   </span>
                   <div className="start-guide">
-                    {getModePageGuide(selectedMode).map((item) => (
+                    {modeGuide.start.map((item) => (
                       <span key={item}>{item}</span>
                     ))}
                   </div>
-                  <button data-nav-button="true" onClick={() => issueCommand('start')} type="button">
-                    {selectedMode === 'puzzle' ? '开始闯关' : selectedMode === 'rush' ? '开始冲刺' : selectedMode === 'brawl' ? '开始乱斗' : '开始游戏'}
-                  </button>
+                  <div className="start-actions">
+                    <button data-nav-button="true" onClick={() => setShowGuide(true)} type="button">先看引导</button>
+                    <button data-nav-button="true" onClick={() => issueCommand('start')} type="button">
+                      {selectedMode === 'puzzle' ? '开始闯关' : selectedMode === 'rush' ? '开始冲刺' : selectedMode === 'brawl' ? '开始乱斗' : '开始游戏'}
+                    </button>
+                  </div>
                 </div>
               )}
               {snapshot.status === 'paused' && <div className="overlay">已暂停</div>}
@@ -550,28 +558,26 @@ export function App() {
               )}
               {showGuide && (
                 <div className="overlay guide-card">
-                  <p>玩法示例</p>
-                  {selectedMode === 'brawl' ? (
-                    <>
-                      <div className="demo-chain" aria-label="brawl guide"><span className="demo-dot yellow" /><span className="demo-dot green" /><span className="demo-dot mint" /><span className="demo-dot red pop" /><span className="demo-dot yellow pop" /></div>
-                      <span>每个小关目标不同，完成后自动进入下一关；适合比赛展示多种玩法。</span>
-                    </>
-                  ) : selectedMode === 'rush' ? (
-                    <>
-                      <div className="demo-chain" aria-label="rush guide"><span className="demo-dot yellow" /><span className="demo-dot yellow" /><span className="demo-dot red pop" /><span className="demo-dot red pop" /><span className="demo-dot green" /></div>
-                      <span>先射击击穿核心围墙，再冲进去吃核心；吃色块凑三消会强化下一次射击。</span>
-                    </>
-                  ) : isSelectedColorMode ? (
-                    <>
-                      <div className="demo-chain" aria-label="direction color guide"><span className="demo-dot yellow" /><span className="demo-dot green" /><span className="demo-dot mint" /><span className="demo-dot red" /></div>
-                      <span>{selectedMode === 'timed-color' ? '每 5 秒自动变色。' : '每次有效转向后变色。'}只能吃同色食物，吃错颜色会失败。</span>
-                    </>
-                  ) : (
-                    <>
-                      <div className="demo-chain" aria-label="红绿红红红示例"><span className="demo-dot red" /><span className="demo-dot green" /><span className="demo-dot red" /><span className="demo-dot red pop" /><span className="demo-dot red pop" /></div>
-                      <span>吃到的颜色会进入蛇尾。尾巴最后 3 节同色，就会一起消除。</span>
-                    </>
-                  )}
+                  <p>{GAME_MODES[selectedMode].name}</p>
+                  <strong>玩法引导</strong>
+                  {renderGuideDemo(modeGuide.demo)}
+                  <div className="guide-feature">
+                    <span>模式特色</span>
+                    <strong>{modeGuide.feature}</strong>
+                  </div>
+                  <span>{modeGuide.goal}</span>
+                  <div className="guide-detail">
+                    <div>
+                      <strong>操作</strong>
+                      <span>{modeGuide.controls}</span>
+                    </div>
+                    <div>
+                      <strong>怎么玩</strong>
+                      {modeGuide.steps.map((step) => (
+                        <span key={step}>{step}</span>
+                      ))}
+                    </div>
+                  </div>
                   <button data-nav-button="true" onClick={() => setShowGuide(false)} type="button">明白了</button>
                 </div>
               )}
@@ -587,9 +593,7 @@ export function App() {
                       : result.mode === 'puzzle'
                         ? `${result.objectiveCompleted ? '本关通过' : '本关失败'} · 已吃掉 ${result.eliminated} 个方向目标 · 共走 ${result.stepsUsed} 步`
                         : result.mode === 'rush'
-                          ? `${result.objectiveCompleted ? '破阵成功' : '破阵结束'} · 核心 ${result.rushCoresCollected ?? 0}/${result.rushRequiredCores ?? V3_BALANCE.rush.requiredCores}`
-                          + `${result.objectiveCompleted ? '' : ` · 还差 ${Math.max(0, (result.rushRequiredCores ?? V3_BALANCE.rush.requiredCores) - (result.rushCoresCollected ?? 0))} 个核心`}`
-                          + ` · 已清 ${result.rushClearedObstacles ?? 0} 格墙 · 射击 ${result.rushSkillUses ?? 0} 次`
+                          ? `${(result.rushCoresCollected ?? 0) > 0 ? '破阵结束' : '未破阵'} · 核心 ${result.rushCoresCollected ?? 0} · 已清 ${result.rushClearedObstacles ?? 0} 格墙 · 射击 ${result.rushSkillUses ?? 0} 次`
                           : `长度 ${result.finalLength} · Combo x${Math.max(1, result.maxCombo)} · 消除 ${result.eliminated} 节`}
                   </span>
                   {result.mode === 'puzzle' && result.puzzleOptimalSteps !== undefined && (
@@ -626,9 +630,11 @@ export function App() {
                   {result.mode === 'rush' && (
                     <div className="result-summary">
                       <div className="result-chip">清障 {result.rushClearedObstacles ?? 0}</div>
-                      <div className="result-chip">核心 {result.rushCoresCollected ?? 0}/{result.rushRequiredCores ?? V3_BALANCE.rush.requiredCores}</div>
+                      <div className="result-chip">核心 {result.rushCoresCollected ?? 0}</div>
                       <div className="result-chip">最大破阵 {result.rushBestLineClear ?? 0}</div>
                       <div className="result-chip">技能 {result.rushSkillUses ?? 0}</div>
+                      <div className="result-chip">同色 {result.rushSameColorClears ?? 0}</div>
+                      <div className="result-chip">异色 {result.rushOffColorBreaks ?? 0}</div>
                       <div className="result-chip">最高 Combo x{Math.max(1, result.maxCombo)}</div>
                     </div>
                   )}
@@ -683,6 +689,108 @@ export function App() {
   );
 }
 
+function renderGuideDemo(kind: ReturnType<typeof getModeGuide>['demo']) {
+  if (kind === 'rush') {
+    return (
+      <div className="demo-chain" aria-label="rush guide">
+        <span className="demo-dot yellow" />
+        <span className="demo-wall" />
+        <span className="demo-wall broken" />
+        <span className="demo-core" />
+        <span className="demo-dot green" />
+      </div>
+    );
+  }
+
+  if (kind === 'color') {
+    return (
+      <div className="demo-chain" aria-label="color guide">
+        <span className="demo-dot red" />
+        <span className="demo-dot mint" />
+        <span className="demo-dot yellow" />
+        <span className="demo-dot green" />
+      </div>
+    );
+  }
+
+  if (kind === 'puzzle') {
+    return (
+      <div className="demo-chain" aria-label="puzzle guide">
+        <span className="demo-arrow">↑</span>
+        <span className="demo-dot mint" />
+        <span className="demo-arrow">→</span>
+        <span className="demo-dot yellow" />
+        <span className="demo-arrow">↓</span>
+      </div>
+    );
+  }
+
+  if (kind === 'brawl') {
+    return (
+      <div className="demo-chain" aria-label="brawl guide">
+        <span className="demo-mode-chip">冲刺</span>
+        <span className="demo-mode-chip">解谜</span>
+        <span className="demo-mode-chip">破阵</span>
+        <span className="demo-mode-chip">染色</span>
+      </div>
+    );
+  }
+
+  if (kind === 'precision') {
+    return (
+      <div className="demo-chain" aria-label="precision guide">
+        <span className="demo-target">目标 9</span>
+        <span className="demo-dot green" />
+        <span className="demo-dot red pop" />
+        <span className="demo-target">刚好</span>
+      </div>
+    );
+  }
+
+  if (kind === 'steps') {
+    return (
+      <div className="demo-chain" aria-label="steps guide">
+        <span className="demo-target">80步</span>
+        <span className="demo-dot yellow" />
+        <span className="demo-dot yellow" />
+        <span className="demo-dot yellow pop" />
+      </div>
+    );
+  }
+
+  if (kind === 'timed') {
+    return (
+      <div className="demo-chain" aria-label="timed guide">
+        <span className="demo-target">60s</span>
+        <span className="demo-dot red" />
+        <span className="demo-dot red pop" />
+        <span className="demo-dot mint" />
+      </div>
+    );
+  }
+
+  if (kind === 'endless') {
+    return (
+      <div className="demo-chain" aria-label="endless guide">
+        <span className="demo-target">穿墙</span>
+        <span className="demo-dot green" />
+        <span className="demo-dot mint" />
+        <span className="demo-target">回环</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="demo-chain" aria-label="tail guide">
+      <span className="demo-dot red" />
+      <span className="demo-dot green" />
+      <span className="demo-dot red" />
+      <span className="demo-dot red pop" />
+      <span className="demo-dot red pop" />
+    </div>
+  );
+}
+
 function useStageScale(): number {
   const [scale, setScale] = useState(1);
 
@@ -728,11 +836,12 @@ function getCurrentModeSummary(
 
   if (mode === 'rush') {
     return {
-      copy: `射击击穿核心围墙，连续冲进 ${V3_BALANCE.rush.requiredCores} 个核心；三消会给下一次射击附魔。`,
+      copy: '45 秒内吃核心续命，三消装颜色子弹，同色一发破墙，异色三发硬破。',
       pills: [
-        `核心 ${snapshot.rushCoresCollected ?? 0}/${snapshot.rushRequiredCores ?? V3_BALANCE.rush.requiredCores}`,
+        `核心 ${snapshot.rushCoresCollected ?? 0} · 本波 ${snapshot.rushWaveCoresLeft ?? 0}`,
         `第 ${snapshot.rushWave ?? 1} 波`,
-        snapshot.rushImbueLabel ?? (context.rushSkillReady ? '射击就绪' : `冷却 ${context.rushCooldownText}`),
+        snapshot.rushBulletInventoryText ?? '子弹 粉0 青0 黄0 绿0',
+        snapshot.rushShotPreviewText ?? (context.rushSkillReady ? '射击就绪' : `冷却 ${context.rushCooldownText}`),
         `最大破阵 ${snapshot.rushBestLineClear ?? 0}`,
       ],
     };
@@ -828,21 +937,6 @@ function getCurrentModeSummary(
   };
 }
 
-function getModePageGuide(mode: GameModeId): string[] {
-  if (mode === 'sprint') return ['90 秒内冲高分', '尾巴三连返时', '完成任务拿强化'];
-  if (mode === 'brawl') return ['随机连续 5 个小关', '完成目标自动换关', '适合比赛展示'];
-  if (mode === 'daily') return ['每天固定规则', '达成目标解锁贴纸', '本地记录连续达成'];
-  if (mode === 'puzzle') return ['先读方向目标', '按箭头方向吃目标', '普通色块用于补尾和三消'];
-  if (mode === 'rush') return ['射击击穿核心围墙', '冲进核心进入下一波', '三消强化下一次射击'];
-  if (mode === 'direction-color') return ['转向后切换蛇头颜色', '只能吃当前同色食物', '色序固定可预判'];
-  if (mode === 'timed-color') return ['每 5 秒自动变色', '只能吃当前同色食物', '提前找下一色路线'];
-  if (mode === 'endless') return ['穿墙循环', '只怕撞到自己', '目标是活得更久'];
-  if (mode === 'precision') return ['80 步后结算', '长度必须刚好达标', '吃块和消除都要克制'];
-  if (mode === 'timed') return ['60 秒限时', '追分也追消除', '节奏越快越好'];
-  if (mode === 'steps') return ['步数有限', '优先规划三消', '每一步都要有收益'];
-  return ['有边界限制', '达到目标分过关', '适合练基础尾消'];
-}
-
 function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string | null {
   if (tutorialDone || snapshot.status === 'gameover') return null;
   if (snapshot.mode === 'puzzle') {
@@ -851,9 +945,9 @@ function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string 
     return '清空所有方向目标即可过关，普通色块只是辅助资源。';
   }
   if (snapshot.mode === 'rush') {
-    if (snapshot.status === 'ready') return `核心被围墙包住，先射击击穿围墙，再冲进去吃核心。`;
-    if ((snapshot.rushCoresCollected ?? 0) === 0) return '先找角度射击，打出通往核心的缺口。';
-    return '核心会刷新下一波堡垒，一次清更多墙能拿更高破阵分。';
+    if (snapshot.status === 'ready') return `三消会装入对应颜色子弹，同色一发破墙，异色三发破墙。`;
+    if ((snapshot.rushCoresCollected ?? 0) === 0) return '先三消装弹，再对准同色围墙射击，吃到核心会加 30 秒。';
+    return '吃核心会续命并刷新下一波，双核心时墙色一定不同。';
   }
   if (snapshot.mode === 'brawl') {
     if (snapshot.status === 'ready') return '大乱斗会随机连续闯 5 个小关，完成目标后自动换关。';

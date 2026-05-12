@@ -3,6 +3,7 @@ import * as Phaser from 'phaser';
 import {
   GAME_CONFIG,
   GAME_MODES,
+  BASIC_COLOR_IDS,
   getColorFill,
   type BasicSnakeColor,
   type FoodType,
@@ -72,7 +73,11 @@ import {
 } from '../core/snake';
 import { PUZZLE_LEVELS, type PuzzleLevel } from '../puzzle/puzzleLevels';
 import { isPuzzleWall } from '../puzzle/puzzleRules';
-import { clearRushLine, generateRushObstacleClusters, generateRushWaveObstacles } from '../rush/obstacles';
+import { generateRushObstacleClusters, generateRushWaveObstacles } from '../rush/obstacles';
+import {
+  getV4ChallengeLevels,
+  type V4ChallengeLevel,
+} from '../challenges/v4Challenges';
 import { V3_BALANCE } from '../../config/balance';
 import {
   getComboRewardText,
@@ -105,7 +110,13 @@ type EffectSettings = {
 };
 
 type BrawlStageType = 'sprint' | 'puzzle' | 'rush' | 'direction-color' | 'timed-color';
+type RushCore = Point & { id: number; color: BasicSnakeColor };
+type RushObstacle = Point & { color: BasicSnakeColor; coreId: number };
+type RushBulletInventory = Record<BasicSnakeColor, number>;
+type RushWallDamage = Record<string, { hits: number; color: BasicSnakeColor }>;
 
+const TIMED_COLOR_INTERVAL_MS = 5000;
+const TIMED_COLOR_FLASH_WARNING_MS = 1200;
 
 export class MainScene extends Phaser.Scene {
   private callbacks: GameCallbacks = {};
@@ -151,15 +162,19 @@ export class MainScene extends Phaser.Scene {
   private puzzleWalls: Point[] = [];
   private puzzleTip?: string;
   private puzzleTargetsCleared = 0;
-  private rushObstacles: Point[] = [];
-  private rushCore?: Point;
+  private rushObstacles: RushObstacle[] = [];
+  private rushCores: RushCore[] = [];
+  private rushNextCoreId = 1;
   private rushCoresCollected = 0;
   private rushWave = 1;
   private rushClearedObstacles = 0;
   private rushBestLineClear = 0;
   private rushSkillCooldownUntil = 0;
   private rushSkillUses = 0;
-  private rushImbueColor?: SnakeColor;
+  private rushBullets: RushBulletInventory = this.createEmptyRushBullets();
+  private rushWallDamage: RushWallDamage = {};
+  private rushSameColorClears = 0;
+  private rushOffColorBreaks = 0;
   private comboRewardText?: string;
   private comboRewardUntil = 0;
   private directionColorTurn = 0;
@@ -171,9 +186,19 @@ export class MainScene extends Phaser.Scene {
   private brawlStageStartEaten = 0;
   private brawlStageStartSeconds = 0;
   private brawlIntroUntil = 0;
+  private brawlStageChallenge?: V4ChallengeLevel;
 
   constructor() {
     super('MainScene');
+  }
+
+  private createEmptyRushBullets(): RushBulletInventory {
+    return {
+      sun: 0,
+      leaf: 0,
+      mint: 0,
+      berry: 0,
+    };
   }
 
   public setCallbacks(callbacks: GameCallbacks): void {
@@ -252,6 +277,7 @@ export class MainScene extends Phaser.Scene {
     if (this.status !== 'playing') return;
 
     this.updateTimedColorMode();
+    if (this.shouldFlashTimedColorHead()) this.draw();
 
     this.checkModeEndConditions();
     if (this.status !== 'playing') return;
@@ -313,33 +339,40 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    const shotColor = this.pickRushShotColor();
+    if (!shotColor) {
+      this.showFloatingText('需要三消装弹', 0xfff06a);
+      this.publishSnapshot();
+      return;
+    }
+
     const head = this.snake[0];
-    const { cleared, beamEnd } = clearRushLine({
+    const { cleared, damaged, beamEnd } = this.resolveRushShot({
       origin: head,
       direction: this.direction,
-      obstacles: this.rushObstacles,
-      columns: GAME_CONFIG.boardColumns,
-      rows: GAME_CONFIG.boardRows,
+      shotColor,
     });
 
+    this.rushSkillUses += 1;
+    this.rushBullets[shotColor] = Math.max(0, this.rushBullets[shotColor] - 1);
+    this.rushSkillCooldownUntil = this.time.now + V3_BALANCE.rush.skillCooldownMs;
+
     if (cleared.length > 0) {
-      const imbueColor = this.rushImbueColor;
-      const extraCleared = imbueColor === 'berry' ? this.getRushSplashCleared(cleared) : [];
-      const allCleared = [...cleared, ...extraCleared];
       this.rushObstacles = this.rushObstacles.filter(
-        (obstacle) => !allCleared.some((point) => samePoint(point, obstacle)),
+        (obstacle) => !cleared.some((point) => samePoint(point, obstacle)),
       );
-      const score = this.getRushClearScore(allCleared.length, imbueColor);
-      this.rushClearedObstacles += allCleared.length;
-      this.rushBestLineClear = Math.max(this.rushBestLineClear, allCleared.length);
-      this.rushSkillUses += 1;
+      cleared.forEach((point) => delete this.rushWallDamage[this.getPointKey(point)]);
+      const score = this.getRushClearScore(cleared.length);
+      this.rushClearedObstacles += cleared.length;
+      this.rushBestLineClear = Math.max(this.rushBestLineClear, cleared.length);
       this.score += score;
-      this.spawnRushBeam(head, beamEnd, allCleared.length);
-      this.showFloatingText(this.getRushClearLabel(allCleared.length, score, imbueColor), 0xfff06a);
+      this.spawnRushBeam(head, beamEnd, cleared.length);
+      this.showFloatingText(this.getRushClearLabel(cleared.length, score, shotColor, damaged), 0xfff06a);
       if (this.effectSettings.screenShakeEnabled) this.cameras.main.shake(90, 0.003);
-      this.rushSkillCooldownUntil = this.time.now + V3_BALANCE.rush.skillCooldownMs;
-      this.rushImbueColor = undefined;
       this.refillRushObstacles(V3_BALANCE.rush.waveObstacleCount + V3_BALANCE.rush.waveRandomObstacleCount);
+    } else if (damaged.length > 0) {
+      this.spawnRushBeam(head, beamEnd, 0);
+      this.showFloatingText(`异色命中 ${damaged[0]?.hits ?? 1}/${V3_BALANCE.rush.offColorHitsToBreak}`, 0xffffff);
     } else {
       this.showFloatingText('前方畅通', 0xffffff);
     }
@@ -348,21 +381,7 @@ export class MainScene extends Phaser.Scene {
     this.publishSnapshot();
   }
 
-  private getRushSplashCleared(cleared: Point[]): Point[] {
-    const splash: Point[] = [];
-    cleared.forEach((center) => {
-      this.rushObstacles.forEach((obstacle) => {
-        if (cleared.some((point) => samePoint(point, obstacle))) return;
-        if (splash.some((point) => samePoint(point, obstacle))) return;
-        if (Math.abs(obstacle.x - center.x) <= 1 && Math.abs(obstacle.y - center.y) <= 1) {
-          splash.push(obstacle);
-        }
-      });
-    });
-    return splash;
-  }
-
-  private getRushClearScore(count: number, imbueColor?: SnakeColor): number {
+  private getRushClearScore(count: number): number {
     const base =
       count <= 1
         ? 30
@@ -373,12 +392,73 @@ export class MainScene extends Phaser.Scene {
             : count === 4
               ? 240
               : 350 + (count - 5) * 90;
-    return Math.round(imbueColor === 'sun' ? base * 1.5 : base);
+    return base;
   }
 
-  private getRushClearLabel(count: number, score: number, imbueColor?: SnakeColor): string {
+  private getRushClearLabel(count: number, score: number, shotColor: BasicSnakeColor, damaged: { hits: number }[]): string {
     const prefix = count >= 5 ? '大破阵' : count >= 3 ? '漂亮破阵' : '射击';
-    return `${prefix} ${count} +${score}${imbueColor ? ' 附魔' : ''}`;
+    const kind = damaged.length > 0 ? '异色破墙' : `${this.getColorShortLabel(shotColor)}弹`;
+    return `${prefix} ${count} +${score} ${kind}`;
+  }
+
+  private resolveRushShot(params: {
+    origin: Point;
+    direction: Direction;
+    shotColor: BasicSnakeColor;
+  }): { cleared: RushObstacle[]; damaged: Array<RushObstacle & { hits: number }>; beamEnd: Point } {
+    const { origin, direction, shotColor } = params;
+    const vector = DIRECTIONS[direction];
+    const cleared: RushObstacle[] = [];
+    const damaged: Array<RushObstacle & { hits: number }> = [];
+    let cursor = { x: origin.x + vector.x, y: origin.y + vector.y };
+
+    while (!isPointOutOfBounds(cursor, GAME_CONFIG.boardColumns, GAME_CONFIG.boardRows)) {
+      const hit = this.rushObstacles.find((obstacle) => samePoint(obstacle, cursor));
+      if (hit) {
+        if (hit.color === shotColor) {
+          cleared.push(hit);
+          this.rushSameColorClears += 1;
+        } else {
+          const key = this.getPointKey(hit);
+          const previous = this.rushWallDamage[key];
+          const nextHits = previous?.color === shotColor ? previous.hits + 1 : 1;
+          if (nextHits >= V3_BALANCE.rush.offColorHitsToBreak) {
+            cleared.push(hit);
+            this.rushOffColorBreaks += 1;
+          } else {
+            this.rushWallDamage[key] = { hits: nextHits, color: shotColor };
+            damaged.push({ ...hit, hits: nextHits });
+          }
+        }
+      }
+      cursor = { x: cursor.x + vector.x, y: cursor.y + vector.y };
+    }
+
+    return { cleared, damaged, beamEnd: cursor };
+  }
+
+  private pickRushShotColor(): BasicSnakeColor | undefined {
+    const firstWall = this.getFirstRushWallInDirection();
+    if (firstWall && this.rushBullets[firstWall.color] > 0) return firstWall.color;
+
+    return [...BASIC_COLOR_IDS]
+      .filter((color) => this.rushBullets[color] > 0)
+      .sort((a, b) => this.rushBullets[b] - this.rushBullets[a])[0];
+  }
+
+  private getFirstRushWallInDirection(): RushObstacle | undefined {
+    const vector = DIRECTIONS[this.direction];
+    let cursor = { x: this.snake[0].x + vector.x, y: this.snake[0].y + vector.y };
+    while (!isPointOutOfBounds(cursor, GAME_CONFIG.boardColumns, GAME_CONFIG.boardRows)) {
+      const hit = this.rushObstacles.find((obstacle) => samePoint(obstacle, cursor));
+      if (hit) return hit;
+      cursor = { x: cursor.x + vector.x, y: cursor.y + vector.y };
+    }
+    return undefined;
+  }
+
+  private getPointKey(point: Point): string {
+    return `${point.x},${point.y}`;
   }
 
   public togglePause(): void {
@@ -486,14 +566,18 @@ export class MainScene extends Phaser.Scene {
     this.puzzleWalls = [];
     this.puzzleTip = undefined;
     this.rushObstacles = [];
-    this.rushCore = undefined;
+    this.rushCores = [];
+    this.rushNextCoreId = 1;
     this.rushCoresCollected = 0;
     this.rushWave = 1;
     this.rushClearedObstacles = 0;
     this.rushBestLineClear = 0;
     this.rushSkillCooldownUntil = 0;
     this.rushSkillUses = 0;
-    this.rushImbueColor = undefined;
+    this.rushBullets = this.createEmptyRushBullets();
+    this.rushWallDamage = {};
+    this.rushSameColorClears = 0;
+    this.rushOffColorBreaks = 0;
     this.comboRewardText = undefined;
     this.comboRewardUntil = 0;
     this.directionColorTurn = 0;
@@ -505,6 +589,7 @@ export class MainScene extends Phaser.Scene {
     this.brawlStageStartEaten = 0;
     this.brawlStageStartSeconds = 0;
     this.brawlIntroUntil = 0;
+    this.brawlStageChallenge = undefined;
     this.modifiers = this.createDefaultModifiers();
     if (this.dailyChallenge) {
       this.modifiers = { ...this.modifiers, ...this.dailyChallenge.modifiers };
@@ -551,6 +636,7 @@ export class MainScene extends Phaser.Scene {
     this.missionStates = [];
     this.selectedUpgrades = [];
     this.upgradeChoices = [];
+    this.rushBullets = this.createEmptyRushBullets();
     this.refillFoods();
     this.setupRushWave();
   }
@@ -576,6 +662,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupBrawlStage(): void {
     this.brawlStageType = this.brawlStages[this.brawlStageIndex] ?? 'sprint';
+    this.brawlStageChallenge = this.pickBrawlStageChallenge(this.brawlStageType);
     if (this.status === 'playing') {
       this.brawlIntroUntil = this.time.now + (this.brawlStageIndex === 0 ? 1600 : 2200);
     }
@@ -587,11 +674,15 @@ export class MainScene extends Phaser.Scene {
     this.puzzleWalls = [];
     this.puzzleTip = this.getBrawlStageTip();
     this.rushObstacles = [];
-    this.rushCore = undefined;
+    this.rushCores = [];
+    this.rushNextCoreId = 1;
     this.rushCoresCollected = 0;
     this.rushWave = 1;
     this.rushSkillCooldownUntil = 0;
-    this.rushImbueColor = undefined;
+    this.rushBullets = this.createEmptyRushBullets();
+    this.rushWallDamage = {};
+    this.rushSameColorClears = 0;
+    this.rushOffColorBreaks = 0;
     this.directionColorTurn = 0;
     this.timedColorTurn = 0;
     this.resetSnakeForStage();
@@ -608,9 +699,28 @@ export class MainScene extends Phaser.Scene {
     this.refillFoods();
   }
 
+  private pickBrawlStageChallenge(stage: BrawlStageType): V4ChallengeLevel | undefined {
+    if (stage === 'sprint') {
+      const levels = getV4ChallengeLevels('tail');
+      return levels[Math.min(levels.length - 1, this.brawlStageIndex)];
+    }
+    if (stage === 'puzzle') {
+      const levels = getV4ChallengeLevels('puzzle');
+      return levels[Math.min(levels.length - 1, this.brawlStageIndex)];
+    }
+    if (stage === 'direction-color') {
+      return getV4ChallengeLevels('color').find((level) => level.colorRule === 'direction');
+    }
+    if (stage === 'timed-color') {
+      return getV4ChallengeLevels('color').find((level) => level.colorRule === 'timed');
+    }
+    return undefined;
+  }
+
   private setupBrawlPuzzleStage(): void {
-    const level = PUZZLE_LEVELS[(this.brawlStageIndex * 2) % Math.min(PUZZLE_LEVELS.length, 6)] ?? PUZZLE_LEVELS[0];
-    const targets = level.targets.slice(0, V3_BALANCE.brawl.puzzleTargetCount);
+    const targetCount = this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.puzzleTargetCount;
+    const level = PUZZLE_LEVELS[this.brawlStageChallenge?.puzzleLevelIndex ?? ((this.brawlStageIndex * 2) % Math.min(PUZZLE_LEVELS.length, 6))] ?? PUZZLE_LEVELS[0];
+    const targets = level.targets.slice(0, targetCount);
     this.foods = [
       ...targets.map((target) => ({
         x: target.x,
@@ -639,25 +749,35 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setupRushWave(): void {
-    this.rushCore = this.createRushCore();
-    this.rushObstacles = this.rushCore
-      ? generateRushWaveObstacles({
-        core: this.rushCore,
-        wave: this.rushWave,
+    const coreCount = this.isBrawlMode() ? 1 : this.randomInt(1, 2);
+    const colors = this.shuffleRushColors().slice(0, coreCount);
+    this.rushCores = [];
+    this.rushObstacles = [];
+    this.rushWallDamage = {};
+
+    for (let index = 0; index < coreCount; index += 1) {
+      const core = this.createRushCore(colors[index]);
+      if (!core) continue;
+      this.rushCores.push(core);
+      const waveObstacles = generateRushWaveObstacles({
+        core,
+        wave: this.rushWave + index,
         columns: GAME_CONFIG.boardColumns,
         rows: GAME_CONFIG.boardRows,
         snakeHead: this.snake[0],
         snakeBody: this.snake,
-        foods: this.foods,
+        foods: [...this.foods, ...this.rushCores, ...this.rushObstacles],
         avoidDirection: this.direction,
         nextRandom: () => this.nextRandom(),
         randomInt: (min, max) => this.randomInt(min, max),
-      })
-      : [];
+      }).map((point) => ({ ...point, color: core.color, coreId: core.id }));
+      this.rushObstacles.push(...waveObstacles.filter((point) => !this.rushObstacles.some((obstacle) => samePoint(obstacle, point))));
+    }
+
     this.refillRushObstacles(V3_BALANCE.rush.waveObstacleCount + V3_BALANCE.rush.waveRandomObstacleCount);
   }
 
-  private createRushCore(): Point | undefined {
+  private createRushCore(color: BasicSnakeColor): RushCore | undefined {
     let bestCandidate: Point | undefined;
     let bestDistance = -1;
     for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -669,15 +789,28 @@ export class MainScene extends Phaser.Scene {
       if (distance < 18) continue;
       if (this.snake.some((segment) => samePoint(segment, point))) continue;
       if (this.foods.some((food) => samePoint(food, point))) continue;
+      if (this.rushCores.some((core) => Math.abs(core.x - point.x) <= 9 && Math.abs(core.y - point.y) <= 7)) continue;
+      if (this.rushObstacles.some((obstacle) => samePoint(obstacle, point))) continue;
       if (distance > bestDistance) {
         bestCandidate = point;
         bestDistance = distance;
       }
     }
-    return bestCandidate;
+    return bestCandidate ? { ...bestCandidate, color, id: this.rushNextCoreId++ } : undefined;
+  }
+
+  private shuffleRushColors(): BasicSnakeColor[] {
+    const colors = [...BASIC_COLOR_IDS];
+    for (let index = colors.length - 1; index > 0; index -= 1) {
+      const swapIndex = this.randomInt(0, index);
+      [colors[index], colors[swapIndex]] = [colors[swapIndex], colors[index]];
+    }
+    return colors;
   }
 
   private spawnRushObstacles(count: number): void {
+    const core = this.rushCores.length > 0 ? this.rushCores[this.randomInt(0, this.rushCores.length - 1)] : undefined;
+    if (!core) return;
     this.rushObstacles = [
       ...this.rushObstacles,
       ...generateRushObstacleClusters({
@@ -686,12 +819,12 @@ export class MainScene extends Phaser.Scene {
         rows: GAME_CONFIG.boardRows,
         snakeHead: this.snake[0],
         snakeBody: this.snake,
-        foods: this.rushCore ? [...this.foods, this.rushCore] : this.foods,
+        foods: [...this.foods, ...this.rushCores],
         existing: this.rushObstacles,
         avoidDirection: this.direction,
         nextRandom: () => this.nextRandom(),
         randomInt: (min, max) => this.randomInt(min, max),
-      }),
+      }).map((point) => ({ ...point, color: core.color, coreId: core.id })),
     ];
   }
 
@@ -880,7 +1013,7 @@ export class MainScene extends Phaser.Scene {
 
     const foodIndex = this.foods.findIndex((food) => samePoint(food, nextHead));
     const eatenFood = foodIndex >= 0 ? this.foods[foodIndex] : undefined;
-    const ateRushCore = this.isRushRuleActive() && this.rushCore !== undefined && samePoint(this.rushCore, nextHead);
+    const ateRushCore = this.isRushRuleActive() ? this.rushCores.find((core) => samePoint(core, nextHead)) : undefined;
     const grows = Boolean(eatenFood && (eatenFood.type === 'normal' || eatenFood.type === 'rainbow'));
     const collisionBody = grows ? this.snake : this.snake.slice(0, -1);
 
@@ -923,7 +1056,7 @@ export class MainScene extends Phaser.Scene {
     this.moveSnake(nextHead);
 
     if (ateRushCore) {
-      this.collectRushCore();
+      this.collectRushCore(ateRushCore);
       this.draw();
       this.publishSnapshot();
       return;
@@ -967,9 +1100,10 @@ export class MainScene extends Phaser.Scene {
     this.snake = advanceSnake(this.snake, nextHead);
   }
 
-  private collectRushCore(): void {
+  private collectRushCore(core: RushCore): void {
     this.rushCoresCollected += 1;
-    this.rushWave += 1;
+    this.rushCores = this.rushCores.filter((item) => item.id !== core.id);
+    this.rushObstacles = this.rushObstacles.filter((obstacle) => obstacle.coreId !== core.id);
     this.score += V3_BALANCE.rush.coreScore;
     this.addSprintTime(V3_BALANCE.rush.coreBonusSeconds, `核心 +${V3_BALANCE.rush.coreBonusSeconds}s`);
     this.showFloatingText(`核心 +${V3_BALANCE.rush.coreScore}`, 0xfff06a);
@@ -978,8 +1112,10 @@ export class MainScene extends Phaser.Scene {
       this.checkBrawlStageProgress();
       return;
     }
-    this.setupRushWave();
-    this.checkModeEndConditions();
+    if (this.rushCores.length === 0) {
+      this.rushWave += 1;
+      this.setupRushWave();
+    }
   }
 
   private applyQueuedDirection(): void {
@@ -1027,9 +1163,12 @@ export class MainScene extends Phaser.Scene {
     const removedSegments = this.snake.slice(this.snake.length - removableCount);
     this.snake.splice(this.snake.length - removableCount, removableCount);
     this.eliminated += removableCount;
-    if (this.mode.id === 'rush') {
-      const imbueColor = removedSegments.find((segment) => segment.color !== 'rainbow')?.color ?? 'rainbow';
-      this.rushImbueColor = imbueColor;
+    if (this.isRushRuleActive()) {
+      const bulletColor = removedSegments.find((segment) => segment.color !== 'rainbow')?.color;
+      if (bulletColor && bulletColor !== 'rainbow') {
+        this.rushBullets[bulletColor as BasicSnakeColor] += 1;
+        this.showFloatingText(`${this.getColorShortLabel(bulletColor as BasicSnakeColor)}弹 +1`, getColorFill(bulletColor));
+      }
     }
 
     const comboWindow = GAME_CONFIG.comboWindowMs + this.modifiers.comboWindowBonusMs;
@@ -1117,7 +1256,8 @@ export class MainScene extends Phaser.Scene {
         }),
       isCellFree: (point, foods) =>
         isCellFreeFromSystem(point, this.snake, foods)
-        && !this.isRushObstacle(point),
+        && !this.isRushObstacle(point)
+        && !this.rushCores.some((core) => samePoint(core, point)),
     });
   }
 
@@ -1224,8 +1364,8 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    if (this.mode.timeLimitSeconds && this.getRemainingSeconds() <= 0) {
-      this.finishGame(false);
+    if (this.getBaseTimeLimitSeconds() && this.getRemainingSeconds() <= 0) {
+      this.finishGame(this.mode.id === 'rush' ? this.rushCoresCollected > 0 : false);
       return;
     }
 
@@ -1236,10 +1376,7 @@ export class MainScene extends Phaser.Scene {
 
   private hasReachedGoal(): boolean {
     if (this.isBrawlMode()) return this.hasCompletedBrawl();
-    if (this.mode.id === 'rush') {
-      return this.rushCoresCollected >= V3_BALANCE.rush.requiredCores
-        && Boolean(this.mode.targetScore && this.score >= this.mode.targetScore);
-    }
+    if (this.mode.id === 'rush') return false;
     return hasReachedModeGoal({
       mode: this.mode,
       score: this.score,
@@ -1275,31 +1412,31 @@ export class MainScene extends Phaser.Scene {
   private hasCompletedBrawlStage(): boolean {
     if (!this.isBrawlMode()) return false;
     if (this.brawlStageType === 'sprint') {
-      return this.eaten - this.brawlStageStartEaten >= V3_BALANCE.brawl.sprintEatTarget
+      return this.eaten - this.brawlStageStartEaten >= this.getBrawlStageTarget()
         || this.score - this.brawlStageStartScore >= V3_BALANCE.brawl.stageScore;
     }
     if (this.brawlStageType === 'puzzle') return this.countPuzzleTargetsLeft() === 0;
     if (this.brawlStageType === 'rush') return this.rushCoresCollected >= V3_BALANCE.brawl.rushRequiredCores;
-    return this.eaten - this.brawlStageStartEaten >= V3_BALANCE.brawl.colorEatTarget;
+    return this.eaten - this.brawlStageStartEaten >= this.getBrawlStageTarget();
   }
 
   private getBrawlStageProgress(): number {
     if (!this.isBrawlMode()) return 0;
-    if (this.brawlStageType === 'sprint') return Math.min(V3_BALANCE.brawl.sprintEatTarget, this.eaten - this.brawlStageStartEaten);
-    if (this.brawlStageType === 'puzzle') return V3_BALANCE.brawl.puzzleTargetCount - this.countPuzzleTargetsLeft();
+    if (this.brawlStageType === 'sprint') return Math.min(this.getBrawlStageTarget(), this.eaten - this.brawlStageStartEaten);
+    if (this.brawlStageType === 'puzzle') return this.getBrawlStageTarget() - this.countPuzzleTargetsLeft();
     if (this.brawlStageType === 'rush') return this.rushCoresCollected;
-    return Math.min(V3_BALANCE.brawl.colorEatTarget, this.eaten - this.brawlStageStartEaten);
+    return Math.min(this.getBrawlStageTarget(), this.eaten - this.brawlStageStartEaten);
   }
 
   private getBrawlStageTarget(): number {
-    if (this.brawlStageType === 'sprint') return V3_BALANCE.brawl.sprintEatTarget;
-    if (this.brawlStageType === 'puzzle') return V3_BALANCE.brawl.puzzleTargetCount;
+    if (this.brawlStageType === 'sprint') return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.sprintEatTarget;
+    if (this.brawlStageType === 'puzzle') return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.puzzleTargetCount;
     if (this.brawlStageType === 'rush') return V3_BALANCE.brawl.rushRequiredCores;
-    return V3_BALANCE.brawl.colorEatTarget;
+    return this.brawlStageChallenge?.target ?? V3_BALANCE.brawl.colorEatTarget;
   }
 
   private getBrawlStageLabel(stage: BrawlStageType = this.brawlStageType): string {
-    if (stage === 'sprint') return '冲刺';
+    if (stage === 'sprint') return '蛇尾消消乐';
     if (stage === 'puzzle') return '解谜';
     if (stage === 'rush') return '破阵';
     if (stage === 'direction-color') return '方向染色';
@@ -1307,16 +1444,16 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getBrawlStageTip(): string {
-    if (this.brawlStageType === 'sprint') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 吃 ${V3_BALANCE.brawl.sprintEatTarget} 个色块`;
-    if (this.brawlStageType === 'puzzle') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 按方向吃掉目标`;
+    if (this.brawlStageType === 'sprint') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · ${this.brawlStageChallenge?.tip ?? `吃 ${this.getBrawlStageTarget()} 个色块`}`;
+    if (this.brawlStageType === 'puzzle') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · ${this.brawlStageChallenge?.tip ?? '按方向吃掉目标'}`;
     if (this.brawlStageType === 'rush') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 射穿围墙吃核心`;
     if (this.brawlStageType === 'direction-color') return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 转向换色吃同色`;
     return `大乱斗 ${this.brawlStageIndex + 1}/${V3_BALANCE.brawl.stageCount} · 5 秒变色吃同色`;
   }
 
   private getBrawlStageHint(stage: BrawlStageType = this.brawlStageType): string {
-    if (stage === 'sprint') return `吃 ${V3_BALANCE.brawl.sprintEatTarget} 个色块，尾巴三连可以加分返时`;
-    if (stage === 'puzzle') return `按箭头方向吃掉 ${V3_BALANCE.brawl.puzzleTargetCount} 个目标，方向错会失败`;
+    if (stage === 'sprint') return this.brawlStageChallenge?.tip ?? `吃 ${this.getBrawlStageTarget()} 个色块，尾巴三连可以加分返时`;
+    if (stage === 'puzzle') return this.brawlStageChallenge?.tip ?? `按箭头方向吃掉 ${this.getBrawlStageTarget()} 个目标，方向错会失败`;
     if (stage === 'rush') return '射击击穿核心围墙，然后冲进去吃核心';
     if (stage === 'direction-color') return '每次有效转向都会换色，只能吃当前同色';
     return '蛇头每 5 秒自动换色，提前找下一种颜色';
@@ -1341,13 +1478,28 @@ export class MainScene extends Phaser.Scene {
 
   private updateTimedColorMode(): void {
     if (!this.isTimedColorRuleActive()) return;
-    const elapsedSeconds = this.isBrawlMode() ? this.getSurvivalSeconds() - this.brawlStageStartSeconds : this.getSurvivalSeconds();
-    const nextTurn = Math.floor(elapsedSeconds / 5);
+    const nextTurn = Math.floor(this.getTimedColorElapsedMs() / TIMED_COLOR_INTERVAL_MS);
     if (nextTurn === this.timedColorTurn) return;
     this.timedColorTurn = nextTurn;
     this.showFloatingText(`变色：${getDirectionCycleLabels(this.timedColorTurn).current}`, 0xfff06a);
     this.draw();
     this.publishSnapshot();
+  }
+
+  private getTimedColorElapsedMs(): number {
+    const elapsedMs = this.getActiveElapsedMs();
+    if (!this.isBrawlMode()) return elapsedMs;
+    return Math.max(0, elapsedMs - this.brawlStageStartSeconds * 1000);
+  }
+
+  private getTimedColorMsUntilChange(): number {
+    const progress = this.getTimedColorElapsedMs() % TIMED_COLOR_INTERVAL_MS;
+    return TIMED_COLOR_INTERVAL_MS - progress;
+  }
+
+  private shouldFlashTimedColorHead(): boolean {
+    if (!this.isTimedColorRuleActive() || this.status !== 'playing') return false;
+    return this.getTimedColorMsUntilChange() <= TIMED_COLOR_FLASH_WARNING_MS;
   }
 
   private getObjectiveText(): string {
@@ -1479,10 +1631,25 @@ export class MainScene extends Phaser.Scene {
       this.puzzleWalls.forEach((wall) => this.drawPuzzleWall(wall, radius));
     } else if (this.isRushRuleActive()) {
       this.rushObstacles.forEach((wall) => this.drawRushObstacle(wall, radius));
-      if (this.rushCore) this.drawRushCore(this.rushCore, radius);
+      this.rushCores.forEach((core) => this.drawRushCore(core, radius));
     }
     this.foods.forEach((food) => this.drawFood(food, radius));
     this.snake.forEach((segment, index) => this.drawSegment(segment, index, radius));
+    this.drawGuideHighlights(radius);
+  }
+
+  private drawGuideHighlights(radius: number): void {
+    if (!this.graphics || this.status === 'gameover') return;
+    if (this.isPuzzleRuleActive()) this.drawPuzzleTargetHighlights(radius);
+  }
+
+  private drawPuzzleTargetHighlights(radius: number): void {
+    if (!this.graphics) return;
+    this.foods.filter((food) => food.isPuzzleTarget).forEach((food) => {
+      const rect = this.cellRect(food.x, food.y, 0.04);
+      this.graphics.lineStyle(4, 0x8ee7ff, 0.68);
+      this.graphics.strokeRoundedRect(rect.x, rect.y, rect.size, rect.size, radius + 5);
+    });
   }
 
   private drawFood(food: Food, radius: number): void {
@@ -1535,14 +1702,21 @@ export class MainScene extends Phaser.Scene {
     this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
   }
 
-  private drawRushObstacle(point: Point, radius: number): void {
+  private drawRushObstacle(point: RushObstacle, radius: number): void {
     if (!this.graphics) return;
     const rect = this.cellRect(point.x, point.y, 0.14);
-    this.graphics.fillStyle(0x6c4428, 1);
+    this.graphics.fillStyle(getColorFill(point.color), 0.92);
     this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
-    this.graphics.lineStyle(3, 0xa16a39, 0.95);
+    this.graphics.lineStyle(3, 0x2d170d, 0.72);
     this.graphics.lineBetween(rect.x + rect.size * 0.22, rect.y + rect.size * 0.22, rect.x + rect.size * 0.78, rect.y + rect.size * 0.78);
     this.graphics.lineBetween(rect.x + rect.size * 0.78, rect.y + rect.size * 0.22, rect.x + rect.size * 0.22, rect.y + rect.size * 0.78);
+    const damage = this.rushWallDamage[this.getPointKey(point)];
+    if (damage) {
+      this.graphics.fillStyle(0xffffff, 0.88);
+      this.graphics.fillCircle(rect.x + rect.size * 0.78, rect.y + rect.size * 0.22, Math.max(3, rect.size * 0.13));
+      this.graphics.fillStyle(0x2d170d, 1);
+      this.graphics.fillCircle(rect.x + rect.size * 0.78, rect.y + rect.size * 0.22, Math.max(1.5, rect.size * 0.055 * damage.hits));
+    }
   }
 
   private drawSpecialIcon(food: Food, rect: { x: number; y: number; size: number }): void {
@@ -1653,6 +1827,7 @@ export class MainScene extends Phaser.Scene {
       : 0xffffff;
     this.graphics.fillStyle(index === 0 ? headFill : getColorFill(segment.color), 1);
     this.graphics.fillRoundedRect(rect.x, rect.y, rect.size, rect.size, radius);
+    if (index === 0) this.drawTimedColorHeadFlash(rect, radius);
     if (index === this.snake.length - 1 && this.time.now < this.tailPulseUntil) {
       const progress = (this.tailPulseUntil - this.time.now) / 260;
       this.graphics.lineStyle(5, 0xfff06a, progress);
@@ -1673,10 +1848,32 @@ export class MainScene extends Phaser.Scene {
       this.graphics.fillStyle(0x24110b, 1);
       this.graphics.fillCircle(rect.x + rect.size * 0.34, rect.y + rect.size * 0.38, Math.max(2, rect.size * 0.08));
       this.graphics.fillCircle(rect.x + rect.size * 0.66, rect.y + rect.size * 0.38, Math.max(2, rect.size * 0.08));
-      if (this.isPuzzleRuleActive() || this.isDirectionColorRuleActive()) {
+      if (this.isPuzzleRuleActive()) {
         this.drawDirectionMark(this.direction, rect, 0x24110b);
       }
     }
+  }
+
+  private drawTimedColorHeadFlash(rect: { x: number; y: number; size: number }, radius: number): void {
+    if (!this.graphics || !this.shouldFlashTimedColorHead()) return;
+    const msUntilChange = this.getTimedColorMsUntilChange();
+    const urgency = 1 - Phaser.Math.Clamp(msUntilChange / TIMED_COLOR_FLASH_WARNING_MS, 0, 1);
+    const pulse = 0.5 + Math.sin(this.time.now / 70) * 0.5;
+    const nextColor = getColorFill(getDirectionCycleColorByTurn(this.getDirectionColorTurnIndex() + 1));
+    const flashColor = pulse > 0.52 ? nextColor : 0xffffff;
+    const alpha = 0.18 + urgency * 0.32 + pulse * 0.18;
+    const inset = Math.max(2, rect.size * 0.13);
+
+    this.graphics.fillStyle(flashColor, alpha);
+    this.graphics.fillRoundedRect(
+      rect.x + inset,
+      rect.y + inset,
+      rect.size - inset * 2,
+      rect.size - inset * 2,
+      Math.max(4, radius - inset),
+    );
+    this.graphics.lineStyle(Math.max(3, rect.size * 0.08), nextColor, 0.5 + pulse * 0.45);
+    this.graphics.strokeRoundedRect(rect.x - 2, rect.y - 2, rect.size + 4, rect.size + 4, radius + 4);
   }
 
   private shouldHighlightTail(index: number): boolean {
@@ -1722,10 +1919,15 @@ export class MainScene extends Phaser.Scene {
       rushClearedObstacles: this.isRushRuleActive() ? this.rushClearedObstacles : undefined,
       rushSkillUses: this.isRushRuleActive() ? this.rushSkillUses : undefined,
       rushCoresCollected: this.isRushRuleActive() ? this.rushCoresCollected : undefined,
-      rushRequiredCores: this.isRushRuleActive() ? (this.isBrawlMode() ? V3_BALANCE.brawl.rushRequiredCores : V3_BALANCE.rush.requiredCores) : undefined,
+      rushRequiredCores: this.isRushRuleActive() ? (this.isBrawlMode() ? V3_BALANCE.brawl.rushRequiredCores : undefined) : undefined,
+      rushWaveCoresLeft: this.isRushRuleActive() ? this.rushCores.length : undefined,
+      rushBulletInventoryText: this.isRushRuleActive() ? this.getRushBulletInventoryText() : undefined,
+      rushShotPreviewText: this.isRushRuleActive() ? this.getRushShotPreviewText() : undefined,
+      rushSameColorClears: this.isRushRuleActive() ? this.rushSameColorClears : undefined,
+      rushOffColorBreaks: this.isRushRuleActive() ? this.rushOffColorBreaks : undefined,
       rushWave: this.isRushRuleActive() ? this.rushWave : undefined,
       rushBestLineClear: this.isRushRuleActive() ? this.rushBestLineClear : undefined,
-      rushImbueLabel: this.isRushRuleActive() ? this.getRushImbueLabel() : undefined,
+      rushImbueLabel: this.isRushRuleActive() ? this.getRushShotPreviewText() : undefined,
       brawlStageLabel: this.isBrawlMode() ? this.getBrawlStageLabel() : undefined,
       brawlStageIndex: this.isBrawlMode() ? this.brawlStageIndex + 1 : undefined,
       brawlStageCount: this.isBrawlMode() ? V3_BALANCE.brawl.stageCount : undefined,
@@ -1749,7 +1951,7 @@ export class MainScene extends Phaser.Scene {
       eaten: this.eaten,
       stepsUsed: this.stepsUsed,
       stepsLeft: this.mode.stepLimit ? this.getStepsLeft() : undefined,
-      remainingSeconds: this.mode.timeLimitSeconds ? this.getRemainingSeconds() : undefined,
+      remainingSeconds: this.getBaseTimeLimitSeconds() ? this.getRemainingSeconds() : undefined,
       survivalSeconds: this.getSurvivalSeconds(),
       bestScore: getBestScore(),
       bestSurvivalSeconds: getBestSurvivalSeconds(),
@@ -1765,17 +1967,25 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getSurvivalSeconds(): number {
+    return Math.max(0, Math.floor(this.getActiveElapsedMs() / 1000));
+  }
+
+  private getActiveElapsedMs(): number {
     const activeUntil = this.status === 'paused' || this.status === 'upgrade' || this.status === 'resume' ? this.pausedAt : this.time.now;
-    return Math.max(0, Math.floor((activeUntil - this.startAt - this.pausedDuration) / 1000));
+    return Math.max(0, activeUntil - this.startAt - this.pausedDuration);
   }
 
   private getAvailableSeconds(): number {
-    return (this.mode.timeLimitSeconds ?? 0) + Math.floor(this.sprintBonusMs / 1000);
+    return this.getBaseTimeLimitSeconds() + Math.floor(this.sprintBonusMs / 1000);
   }
 
   private getRemainingSeconds(): number {
-    if (!this.mode.timeLimitSeconds) return 0;
+    if (!this.getBaseTimeLimitSeconds()) return 0;
     return Math.max(0, this.getAvailableSeconds() - this.getSurvivalSeconds());
+  }
+
+  private getBaseTimeLimitSeconds(): number {
+    return this.mode.timeLimitSeconds ?? 0;
   }
 
   private getStepsLeft(): number {
@@ -1792,23 +2002,37 @@ export class MainScene extends Phaser.Scene {
     );
   }
 
-  private getRushImbueLabel(): string | undefined {
-    if (!this.rushImbueColor) return undefined;
-    if (this.rushImbueColor === 'sun') return '黄 · 破阵分+50%';
-    if (this.rushImbueColor === 'berry') return '粉 · 爆破周围';
-    if (this.rushImbueColor === 'mint') return '青 · 待扩展';
-    if (this.rushImbueColor === 'leaf') return '绿 · 待扩展';
-    return '彩虹 · 待扩展';
+  private getRushBulletInventoryText(): string {
+    return BASIC_COLOR_IDS
+      .map((color) => `${this.getColorShortLabel(color)}${this.rushBullets[color]}`)
+      .join(' ');
   }
 
-  private drawRushCore(point: Point, radius: number): void {
+  private getRushShotPreviewText(): string | undefined {
+    const shotColor = this.pickRushShotColor();
+    if (!shotColor) return '无弹';
+    const firstWall = this.getFirstRushWallInDirection();
+    if (!firstWall) return `${this.getColorShortLabel(shotColor)}弹`;
+    return firstWall.color === shotColor
+      ? `${this.getColorShortLabel(shotColor)}弹同色`
+      : `${this.getColorShortLabel(shotColor)}弹异色`;
+  }
+
+  private getColorShortLabel(color: BasicSnakeColor): string {
+    if (color === 'sun') return '黄';
+    if (color === 'leaf') return '绿';
+    if (color === 'mint') return '青';
+    return '粉';
+  }
+
+  private drawRushCore(point: RushCore, radius: number): void {
     if (!this.graphics) return;
     const rect = this.cellRect(point.x, point.y, 0.08);
     const cx = rect.x + rect.size / 2;
     const cy = rect.y + rect.size / 2;
     this.graphics.fillStyle(0x2b1710, 1);
     this.graphics.fillCircle(cx, cy, rect.size * 0.52);
-    this.graphics.fillStyle(0xfff06a, 1);
+    this.graphics.fillStyle(getColorFill(point.color), 1);
     this.graphics.fillCircle(cx, cy, rect.size * 0.42);
     this.graphics.lineStyle(Math.max(3, rect.size * 0.08), 0xffffff, 0.9);
     this.graphics.strokeCircle(cx, cy, rect.size * 0.28);
@@ -1932,10 +2156,15 @@ export class MainScene extends Phaser.Scene {
       rushClearedObstacles: this.isRushRuleActive() ? this.rushClearedObstacles : undefined,
       rushSkillUses: this.isRushRuleActive() ? this.rushSkillUses : undefined,
       rushCoresCollected: this.isRushRuleActive() ? this.rushCoresCollected : undefined,
-      rushRequiredCores: this.isRushRuleActive() ? (this.isBrawlMode() ? V3_BALANCE.brawl.rushRequiredCores : V3_BALANCE.rush.requiredCores) : undefined,
+      rushRequiredCores: this.isRushRuleActive() ? (this.isBrawlMode() ? V3_BALANCE.brawl.rushRequiredCores : undefined) : undefined,
+      rushWaveCoresLeft: this.isRushRuleActive() ? this.rushCores.length : undefined,
+      rushBulletInventoryText: this.isRushRuleActive() ? this.getRushBulletInventoryText() : undefined,
+      rushShotPreviewText: this.isRushRuleActive() ? this.getRushShotPreviewText() : undefined,
+      rushSameColorClears: this.isRushRuleActive() ? this.rushSameColorClears : undefined,
+      rushOffColorBreaks: this.isRushRuleActive() ? this.rushOffColorBreaks : undefined,
       rushWave: this.isRushRuleActive() ? this.rushWave : undefined,
       rushBestLineClear: this.isRushRuleActive() ? this.rushBestLineClear : undefined,
-      rushImbueLabel: this.isRushRuleActive() ? this.getRushImbueLabel() : undefined,
+      rushImbueLabel: this.isRushRuleActive() ? this.getRushShotPreviewText() : undefined,
       brawlStageLabel: this.isBrawlMode() ? this.getBrawlStageLabel() : undefined,
       brawlStageIndex: this.isBrawlMode() ? this.brawlStageIndex + 1 : undefined,
       brawlStageCount: this.isBrawlMode() ? V3_BALANCE.brawl.stageCount : undefined,
@@ -1955,7 +2184,7 @@ export class MainScene extends Phaser.Scene {
       eaten: this.eaten,
       stepsUsed: this.stepsUsed,
       stepsLeft: this.mode.stepLimit ? this.getStepsLeft() : undefined,
-      remainingSeconds: this.mode.timeLimitSeconds ? this.getRemainingSeconds() : undefined,
+      remainingSeconds: this.getBaseTimeLimitSeconds() ? this.getRemainingSeconds() : undefined,
       survivalSeconds: this.getSurvivalSeconds(),
       bestScore: 0,
       bestSurvivalSeconds: getBestSurvivalSeconds(),

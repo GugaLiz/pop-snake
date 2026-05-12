@@ -32,7 +32,19 @@ export const BASIC_COLOR_IDS = ['sun', 'leaf', 'mint', 'berry'] as const;
 export type SnakeColor = (typeof GAME_COLORS)[number]['id'];
 export type BasicSnakeColor = (typeof BASIC_COLOR_IDS)[number];
 export type FoodType = 'normal' | 'bomb' | 'rainbow' | 'slow';
-export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush' | 'direction-color' | 'timed-color' | 'brawl';
+export type GameModeId =
+  | 'sprint'
+  | 'daily'
+  | 'standard'
+  | 'endless'
+  | 'timed'
+  | 'steps'
+  | 'precision'
+  | 'puzzle'
+  | 'rush'
+  | 'direction-color'
+  | 'timed-color'
+  | 'brawl';
 
 export type GameModeConfig = {
   id: GameModeId;
@@ -48,8 +60,8 @@ export type GameModeConfig = {
 export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   sprint: {
     id: 'sprint',
-    name: '冲刺模式',
-    description: '90 秒冲分，三消返时并获得局内强化。',
+    name: '蛇尾消消乐',
+    description: '吃色块，凑蛇尾三连消除，90 秒内冲高分。',
     timeLimitSeconds: GAME_CONFIG.sprintBaseSeconds,
   },
   daily: {
@@ -93,7 +105,7 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   },
   puzzle: {
     id: 'puzzle',
-    name: '箭蛇解谜',
+    name: '箭头解谜蛇',
     description: '方向匹配、读图规划、逐关推进。',
   },
   rush: {
@@ -105,14 +117,14 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
   },
   'direction-color': {
     id: 'direction-color',
-    name: '方向染色',
+    name: '同色匹配蛇',
     description: '蛇头按固定色序循环，只能吃同色食物。',
     timeLimitSeconds: 75,
     targetScore: 1600,
   },
   'timed-color': {
     id: 'timed-color',
-    name: '5秒变色',
+    name: '5秒同色蛇',
     description: '蛇头每 5 秒自动换色，只能吃当前同色食物。',
     timeLimitSeconds: 75,
     targetScore: 1600,

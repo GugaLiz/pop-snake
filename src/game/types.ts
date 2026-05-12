@@ -76,6 +76,11 @@ export type GameSnapshot = {
   rushSkillUses?: number;
   rushCoresCollected?: number;
   rushRequiredCores?: number;
+  rushWaveCoresLeft?: number;
+  rushBulletInventoryText?: string;
+  rushShotPreviewText?: string;
+  rushSameColorClears?: number;
+  rushOffColorBreaks?: number;
   rushWave?: number;
   rushBestLineClear?: number;
   rushImbueLabel?: string;
