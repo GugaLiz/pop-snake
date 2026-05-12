@@ -24,6 +24,14 @@ export const V3_BALANCE = {
     waveRandomObstacleCount: 10,
     minimumMoveIntervalMs: 122,
   },
+  brawl: {
+    stageCount: 5,
+    sprintEatTarget: 5,
+    colorEatTarget: 4,
+    puzzleTargetCount: 2,
+    rushRequiredCores: 1,
+    stageScore: 350,
+  },
   movement: {
     minimumMoveIntervalMs: 135,
   },

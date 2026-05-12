@@ -104,7 +104,4 @@
       </profile-state>
     </entry>
   </component>
-  <component name="TypeScriptCompiler">
-    <option name="useConfig" value="true" />
-  </component>
 </project>

@@ -79,6 +79,13 @@ export type GameSnapshot = {
   rushWave?: number;
   rushBestLineClear?: number;
   rushImbueLabel?: string;
+  brawlStageLabel?: string;
+  brawlStageIndex?: number;
+  brawlStageCount?: number;
+  brawlStageProgress?: number;
+  brawlStageTarget?: number;
+  brawlStageIntro?: boolean;
+  brawlStageHint?: string;
   resumeCountdownSeconds?: number;
   resumeCountdownProgress?: number;
   upgradeCharge?: number;

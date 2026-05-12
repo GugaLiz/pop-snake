@@ -32,7 +32,7 @@ export const BASIC_COLOR_IDS = ['sun', 'leaf', 'mint', 'berry'] as const;
 export type SnakeColor = (typeof GAME_COLORS)[number]['id'];
 export type BasicSnakeColor = (typeof BASIC_COLOR_IDS)[number];
 export type FoodType = 'normal' | 'bomb' | 'rainbow' | 'slow';
-export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush' | 'direction-color';
+export type GameModeId = 'sprint' | 'daily' | 'standard' | 'endless' | 'timed' | 'steps' | 'precision' | 'puzzle' | 'rush' | 'direction-color' | 'timed-color' | 'brawl';
 
 export type GameModeConfig = {
   id: GameModeId;
@@ -109,6 +109,20 @@ export const GAME_MODES: Record<GameModeId, GameModeConfig> = {
     description: '蛇头按固定色序循环，只能吃同色食物。',
     timeLimitSeconds: 75,
     targetScore: 1600,
+  },
+  'timed-color': {
+    id: 'timed-color',
+    name: '5秒变色',
+    description: '蛇头每 5 秒自动换色，只能吃当前同色食物。',
+    timeLimitSeconds: 75,
+    targetScore: 1600,
+  },
+  brawl: {
+    id: 'brawl',
+    name: '大乱斗',
+    description: '随机连续闯冲刺、解谜、破阵和染色小关，适合比赛展示。',
+    timeLimitSeconds: 120,
+    targetScore: 2200,
   },
 };
 

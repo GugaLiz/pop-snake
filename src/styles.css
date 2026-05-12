@@ -508,11 +508,27 @@ h1 {
   font-weight: 1000;
   text-align: center;
 }
-.result-card, .start-card, .guide-card, .upgrade-card, .resume-card { align-content: center; gap: 12px; }
-.result-card p, .result-card span, .start-card p, .start-card span, .guide-card p, .guide-card span, .upgrade-card p, .upgrade-card span, .resume-card p, .resume-card span { margin: 0; font-size: 1rem; font-weight: 900; }
-.result-card strong, .start-card strong { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; }
+.result-card, .start-card, .guide-card, .upgrade-card, .resume-card, .brawl-stage-card { align-content: center; gap: 12px; }
+.result-card p, .result-card span, .start-card p, .start-card span, .guide-card p, .guide-card span, .upgrade-card p, .upgrade-card span, .resume-card p, .resume-card span, .brawl-stage-card p, .brawl-stage-card span { margin: 0; font-size: 1rem; font-weight: 900; }
+.result-card strong, .start-card strong, .brawl-stage-card strong { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; }
 .start-card { z-index: 3; }
+.start-guide {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: min(720px, 92%);
+}
+.start-guide span {
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 249, 234, 0.78);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
 .guide-card { z-index: 4; }
+.brawl-stage-card { z-index: 4; background: rgba(255, 240, 176, 0.94); }
 .upgrade-card { z-index: 5; padding: 26px 30px; gap: 18px; }
 .resume-card { z-index: 5; padding: 22px; }
 .upgrade-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; width: min(820px, 100%); align-items: stretch; }

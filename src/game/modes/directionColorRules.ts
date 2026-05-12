@@ -10,7 +10,15 @@ export const DIRECTION_COLOR_LABELS: Record<BasicSnakeColor, string> = {
 };
 
 export function isDirectionColorMode(modeId: GameModeId): boolean {
+  return modeId === 'direction-color' || modeId === 'timed-color';
+}
+
+export function isDirectionTurnColorMode(modeId: GameModeId): boolean {
   return modeId === 'direction-color';
+}
+
+export function isTimedColorMode(modeId: GameModeId): boolean {
+  return modeId === 'timed-color';
 }
 
 export function getDirectionCycleColorByTurn(turnIndex: number): BasicSnakeColor {

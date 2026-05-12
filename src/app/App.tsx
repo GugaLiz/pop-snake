@@ -58,11 +58,15 @@ const MODE_LABELS: Record<GameModeId, { tone: Tone; tag: string }> = {
   puzzle: { tone: 'epic', tag: '解谜' },
   rush: { tone: 'rare', tag: '开路' },
   'direction-color': { tone: 'legendary', tag: '染色' },
+  'timed-color': { tone: 'legendary', tag: '变色' },
+  brawl: { tone: 'mythic', tag: '乱斗' },
 };
 
-const PRIMARY_MODES: GameModeId[] = ['sprint', 'daily'];
-const BRANCH_MODES: GameModeId[] = ['puzzle', 'rush', 'direction-color'];
+const PRIMARY_MODES: GameModeId[] = ['sprint', 'daily', 'brawl'];
+const BRANCH_MODES: GameModeId[] = ['puzzle', 'rush', 'direction-color', 'timed-color'];
 const MORE_MODES: GameModeId[] = ['endless', 'precision', 'standard', 'timed', 'steps'];
+
+const COLOR_MODES: GameModeId[] = ['direction-color', 'timed-color'];
 
 export function App() {
   const stickerDefinitions = getStickerDefinitions();
@@ -198,6 +202,9 @@ export function App() {
   const puzzleProgress = selectedMode === 'puzzle' ? parsePuzzleObjective(snapshot.objectiveText) : null;
   const rushSkillReady = Boolean(snapshot.rushSkillReady);
   const rushCooldownText = snapshot.rushSkillCooldownSeconds ? `${snapshot.rushSkillCooldownSeconds}s` : '就绪';
+  const isSelectedColorMode = COLOR_MODES.includes(selectedMode);
+  const isActiveColorMode = isSelectedColorMode || snapshot.directionColorCurrentLabel !== undefined;
+  const isActiveRushMode = selectedMode === 'rush' || snapshot.rushSkillReady !== undefined;
   const comboActive = selectedMode !== 'puzzle' && snapshot.combo > 1;
   const currentModeSummary = getCurrentModeSummary(selectedMode, snapshot, {
     puzzleProgress,
@@ -209,7 +216,7 @@ export function App() {
   const statusMessages = [
     snapshot.isDanger ? '蛇身变长了，尽快凑尾巴三连消除。' : null,
     snapshot.isSlowed ? '减速生效中' : null,
-    snapshot.mode === 'rush' && snapshot.status === 'playing'
+    isActiveRushMode && snapshot.status === 'playing'
       ? rushSkillReady
           ? snapshot.rushImbueLabel
           ? `射击已附魔：${snapshot.rushImbueLabel}`
@@ -436,14 +443,14 @@ export function App() {
             <div className="top-hud">
               <div className="metric primary"><span>分数</span><strong>{snapshot.score}</strong></div>
               <div className="metric"><span>长度</span><strong>{snapshot.length}</strong></div>
-              <div className={`metric${comboActive ? ' combo-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '目标' : selectedMode === 'rush' ? '清障' : selectedMode === 'direction-color' ? '当前' : 'Combo'}</span><strong>{selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.cleared}/${puzzleProgress.total}` : selectedMode === 'rush' ? `${snapshot.rushClearedObstacles ?? 0}` : selectedMode === 'direction-color' ? `${snapshot.directionColorCurrentLabel ?? '粉'}` : `x${Math.max(1, snapshot.combo)}`}</strong></div>
-              <div className="metric"><span>{selectedMode === 'sprint' || selectedMode === 'daily' ? '强化' : selectedMode === 'puzzle' ? '关卡' : selectedMode === 'rush' ? '技能' : selectedMode === 'direction-color' ? '下次' : '消除'}</span><strong>{selectedMode === 'sprint' || selectedMode === 'daily' ? snapshot.selectedUpgrades.length : selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.level}/${puzzleProgress.levelTotal}` : selectedMode === 'rush' ? snapshot.rushImbueLabel ? '附魔' : rushCooldownText : selectedMode === 'direction-color' ? `${snapshot.directionColorNextLabel ?? '青'}` : snapshot.eliminated}</strong></div>
+              <div className={`metric${comboActive ? ' combo-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '目标' : selectedMode === 'brawl' ? '关卡' : isActiveRushMode ? '清障' : isActiveColorMode ? '当前' : 'Combo'}</span><strong>{selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.cleared}/${puzzleProgress.total}` : selectedMode === 'brawl' ? `${snapshot.brawlStageIndex ?? 1}/${snapshot.brawlStageCount ?? 5}` : isActiveRushMode ? `${snapshot.rushClearedObstacles ?? 0}` : isActiveColorMode ? `${snapshot.directionColorCurrentLabel ?? '粉'}` : `x${Math.max(1, snapshot.combo)}`}</strong></div>
+              <div className="metric"><span>{selectedMode === 'sprint' || selectedMode === 'daily' ? '强化' : selectedMode === 'puzzle' ? '关卡' : selectedMode === 'brawl' ? '进度' : isActiveRushMode ? '技能' : isActiveColorMode ? '下次' : '消除'}</span><strong>{selectedMode === 'sprint' || selectedMode === 'daily' ? snapshot.selectedUpgrades.length : selectedMode === 'puzzle' && puzzleProgress ? `${puzzleProgress.level}/${puzzleProgress.levelTotal}` : selectedMode === 'brawl' ? `${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1}` : isActiveRushMode ? snapshot.rushImbueLabel ? '附魔' : rushCooldownText : isActiveColorMode ? `${snapshot.directionColorNextLabel ?? '青'}` : snapshot.eliminated}</strong></div>
               <div className={`metric${comboActive ? ' combo-time-hot' : ''}`}><span>{selectedMode === 'puzzle' ? '步数' : snapshot.remainingSeconds !== undefined ? '剩余' : '时间'}</span><strong>{selectedMode === 'puzzle' ? `${snapshot.stepsUsed}步` : snapshot.remainingSeconds !== undefined ? `${snapshot.remainingSeconds}s` : `${snapshot.survivalSeconds}s`}</strong></div>
               {snapshot.stepsLeft !== undefined && <div className="metric"><span>步数</span><strong>{snapshot.stepsLeft}</strong></div>}
               <div className="records inline"><span>最高 {snapshot.bestScore}</span><span>最长 {snapshot.bestSurvivalSeconds}s</span></div>
-              <div className={`controls-row inline-controls${selectedMode === 'rush' ? ' rush-controls' : ''}`}>
+              <div className={`controls-row inline-controls${isActiveRushMode ? ' rush-controls' : ''}`}>
                 {snapshot.status === 'ready' ? <button data-nav-button="true" onClick={() => issueCommand('start')} type="button">开始</button> : <button data-nav-button="true" onClick={() => issueCommand('pause')} type="button">{snapshot.status === 'paused' ? '继续' : '暂停'}</button>}
-                {selectedMode === 'rush' && (
+                {isActiveRushMode && (
                   <button
                     className={snapshot.status === 'ready' || snapshot.status === 'gameover' ? 'reserved-control' : undefined}
                     data-nav-button={snapshot.status === 'ready' || snapshot.status === 'gameover' ? undefined : 'true'}
@@ -473,16 +480,36 @@ export function App() {
                       ? snapshot.dailyChallengeText
                       : selectedMode === 'rush'
                         ? `射击击穿核心围墙，冲进去吃核心；三消会强化下一次射击。`
+                        : selectedMode === 'brawl'
+                          ? '连续随机闯 5 个小关，冲刺、解谜、破阵和染色会轮番出现。'
                         : selectedMode === 'direction-color'
                           ? `每次有效转向后按固定色序切换，只能吃同色食物：${getDirectionColorGuideText()}。`
+                        : selectedMode === 'timed-color'
+                          ? `蛇头每 5 秒自动按固定色序切换，只能吃当前同色食物：${getDirectionColorGuideText()}。`
                         : GAME_MODES[selectedMode].description}
                   </span>
+                  <div className="start-guide">
+                    {getModePageGuide(selectedMode).map((item) => (
+                      <span key={item}>{item}</span>
+                    ))}
+                  </div>
                   <button data-nav-button="true" onClick={() => issueCommand('start')} type="button">
-                    {selectedMode === 'puzzle' ? '开始闯关' : selectedMode === 'rush' ? '开始冲刺' : '开始游戏'}
+                    {selectedMode === 'puzzle' ? '开始闯关' : selectedMode === 'rush' ? '开始冲刺' : selectedMode === 'brawl' ? '开始乱斗' : '开始游戏'}
                   </button>
                 </div>
               )}
               {snapshot.status === 'paused' && <div className="overlay">已暂停</div>}
+              {snapshot.brawlStageIntro && (
+                <div className="overlay brawl-stage-card">
+                  <p>下一关</p>
+                  <strong>{snapshot.brawlStageLabel ?? '随机'}</strong>
+                  <span>{snapshot.brawlStageIndex ?? 1}/{snapshot.brawlStageCount ?? 5} · 目标 {snapshot.brawlStageProgress ?? 0}/{snapshot.brawlStageTarget ?? 1}</span>
+                  <div className="start-guide">
+                    <span>{snapshot.brawlStageHint ?? '完成目标后自动进入下一关'}</span>
+                    <span>按方向键可立刻开始</span>
+                  </div>
+                </div>
+              )}
               {snapshot.status === 'upgrade' && (
                 <div className="overlay upgrade-card">
                   <p>选一个本局强化</p>
@@ -524,15 +551,20 @@ export function App() {
               {showGuide && (
                 <div className="overlay guide-card">
                   <p>玩法示例</p>
-                  {selectedMode === 'rush' ? (
+                  {selectedMode === 'brawl' ? (
+                    <>
+                      <div className="demo-chain" aria-label="brawl guide"><span className="demo-dot yellow" /><span className="demo-dot green" /><span className="demo-dot mint" /><span className="demo-dot red pop" /><span className="demo-dot yellow pop" /></div>
+                      <span>每个小关目标不同，完成后自动进入下一关；适合比赛展示多种玩法。</span>
+                    </>
+                  ) : selectedMode === 'rush' ? (
                     <>
                       <div className="demo-chain" aria-label="rush guide"><span className="demo-dot yellow" /><span className="demo-dot yellow" /><span className="demo-dot red pop" /><span className="demo-dot red pop" /><span className="demo-dot green" /></div>
                       <span>先射击击穿核心围墙，再冲进去吃核心；吃色块凑三消会强化下一次射击。</span>
                     </>
-                  ) : selectedMode === 'direction-color' ? (
+                  ) : isSelectedColorMode ? (
                     <>
                       <div className="demo-chain" aria-label="direction color guide"><span className="demo-dot yellow" /><span className="demo-dot green" /><span className="demo-dot mint" /><span className="demo-dot red" /></div>
-                      <span>每次有效转向后，蛇头按固定色序切换。只能吃同色食物，吃错颜色会失败。</span>
+                      <span>{selectedMode === 'timed-color' ? '每 5 秒自动变色。' : '每次有效转向后变色。'}只能吃同色食物，吃错颜色会失败。</span>
                     </>
                   ) : (
                     <>
@@ -550,6 +582,8 @@ export function App() {
                   <span>
                     {result.mode === 'daily' && result.dailyChallengeText
                       ? result.dailyChallengeText
+                      : result.mode === 'brawl'
+                        ? `${result.objectiveCompleted ? '乱斗通关' : '乱斗结束'} · 小关 ${Math.min(result.brawlStageIndex ?? 1, result.brawlStageCount ?? 5)}/${result.brawlStageCount ?? 5} · 当前 ${result.brawlStageLabel ?? '随机'} ${result.brawlStageProgress ?? 0}/${result.brawlStageTarget ?? 1}`
                       : result.mode === 'puzzle'
                         ? `${result.objectiveCompleted ? '本关通过' : '本关失败'} · 已吃掉 ${result.eliminated} 个方向目标 · 共走 ${result.stepsUsed} 步`
                         : result.mode === 'rush'
@@ -581,7 +615,7 @@ export function App() {
                   {result.unlockedStickerLabel && (
                     <div className="daily-result-banner success">已解锁 {result.unlockedStickerLabel}</div>
                   )}
-                  {result.mode !== 'puzzle' && result.mode !== 'rush' && (
+                  {result.mode !== 'puzzle' && result.mode !== 'rush' && result.mode !== 'brawl' && (
                     <div className="result-summary">
                       <div className="result-chip">任务 {result.missionStates.filter((item) => item.completed).length}/{result.missionStates.length || 0}</div>
                       <div className="result-chip">强化 {result.selectedUpgrades.length}</div>
@@ -598,7 +632,15 @@ export function App() {
                       <div className="result-chip">最高 Combo x{Math.max(1, result.maxCombo)}</div>
                     </div>
                   )}
-                  {result.mode !== 'puzzle' && result.mode !== 'rush' && result.selectedUpgrades.length > 0 && (
+                  {result.mode === 'brawl' && (
+                    <div className="result-summary">
+                      <div className="result-chip">小关 {Math.min(result.brawlStageIndex ?? 1, result.brawlStageCount ?? 5)}/{result.brawlStageCount ?? 5}</div>
+                      <div className="result-chip">当前 {result.brawlStageLabel ?? '随机'}</div>
+                      <div className="result-chip">进度 {result.brawlStageProgress ?? 0}/{result.brawlStageTarget ?? 1}</div>
+                      <div className="result-chip">最高 Combo x{Math.max(1, result.maxCombo)}</div>
+                    </div>
+                  )}
+                  {result.mode !== 'puzzle' && result.mode !== 'rush' && result.mode !== 'brawl' && result.selectedUpgrades.length > 0 && (
                     <div className="result-upgrades">
                       {result.selectedUpgrades.slice(-4).map((upgrade, index) => (
                         <span className={`result-upgrade-chip rarity-${upgrade.rarity}`} key={upgrade.id + index}>{upgrade.title}</span>
@@ -626,7 +668,7 @@ export function App() {
             <aside className="virtual-pad panel" aria-label="移动端方向键">
               <button className="up" data-nav-button="true" onClick={() => issueCommand('up')} type="button">上</button>
               <button className="left" data-nav-button="true" onClick={() => issueCommand('left')} type="button">左</button>
-              {selectedMode === 'rush' && (
+              {isActiveRushMode && (
                 <button className="skill" data-nav-button="true" onClick={() => issueCommand('skill')} type="button">
                   {rushSkillReady ? '射击' : rushCooldownText}
                 </button>
@@ -696,9 +738,31 @@ function getCurrentModeSummary(
     };
   }
 
+  if (mode === 'brawl') {
+    return {
+      copy: '连续随机闯小关，快速展示冲刺、解谜、破阵和染色。',
+      pills: [
+        `${snapshot.brawlStageLabel ?? '随机'} ${snapshot.brawlStageIndex ?? 1}/${snapshot.brawlStageCount ?? 5}`,
+        `进度 ${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1}`,
+        `${snapshot.remainingSeconds ?? 120}s`,
+      ],
+    };
+  }
+
   if (mode === 'direction-color') {
     return {
       copy: '每次有效转向后按固定色序切换，只能吃同色食物。',
+      pills: [
+        getDirectionColorGuideText(),
+        `当前 ${snapshot.directionColorCurrentLabel ?? '粉'} / 下次 ${snapshot.directionColorNextLabel ?? '青'}`,
+        `${snapshot.remainingSeconds ?? 75}s`,
+      ],
+    };
+  }
+
+  if (mode === 'timed-color') {
+    return {
+      copy: '每 5 秒自动变色，提前找好下一种颜色的位置。',
       pills: [
         getDirectionColorGuideText(),
         `当前 ${snapshot.directionColorCurrentLabel ?? '粉'} / 下次 ${snapshot.directionColorNextLabel ?? '青'}`,
@@ -764,6 +828,21 @@ function getCurrentModeSummary(
   };
 }
 
+function getModePageGuide(mode: GameModeId): string[] {
+  if (mode === 'sprint') return ['90 秒内冲高分', '尾巴三连返时', '完成任务拿强化'];
+  if (mode === 'brawl') return ['随机连续 5 个小关', '完成目标自动换关', '适合比赛展示'];
+  if (mode === 'daily') return ['每天固定规则', '达成目标解锁贴纸', '本地记录连续达成'];
+  if (mode === 'puzzle') return ['先读方向目标', '按箭头方向吃目标', '普通色块用于补尾和三消'];
+  if (mode === 'rush') return ['射击击穿核心围墙', '冲进核心进入下一波', '三消强化下一次射击'];
+  if (mode === 'direction-color') return ['转向后切换蛇头颜色', '只能吃当前同色食物', '色序固定可预判'];
+  if (mode === 'timed-color') return ['每 5 秒自动变色', '只能吃当前同色食物', '提前找下一色路线'];
+  if (mode === 'endless') return ['穿墙循环', '只怕撞到自己', '目标是活得更久'];
+  if (mode === 'precision') return ['80 步后结算', '长度必须刚好达标', '吃块和消除都要克制'];
+  if (mode === 'timed') return ['60 秒限时', '追分也追消除', '节奏越快越好'];
+  if (mode === 'steps') return ['步数有限', '优先规划三消', '每一步都要有收益'];
+  return ['有边界限制', '达到目标分过关', '适合练基础尾消'];
+}
+
 function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string | null {
   if (tutorialDone || snapshot.status === 'gameover') return null;
   if (snapshot.mode === 'puzzle') {
@@ -776,11 +855,21 @@ function getTutorialText(snapshot: GameSnapshot, tutorialDone: boolean): string 
     if ((snapshot.rushCoresCollected ?? 0) === 0) return '先找角度射击，打出通往核心的缺口。';
     return '核心会刷新下一波堡垒，一次清更多墙能拿更高破阵分。';
   }
+  if (snapshot.mode === 'brawl') {
+    if (snapshot.status === 'ready') return '大乱斗会随机连续闯 5 个小关，完成目标后自动换关。';
+    return `${snapshot.brawlStageLabel ?? '随机'}小关：完成 ${snapshot.brawlStageProgress ?? 0}/${snapshot.brawlStageTarget ?? 1} 后进入下一关。`;
+  }
   if (snapshot.mode === 'direction-color') {
     if (snapshot.status === 'ready') return `每次有效转向后按固定色序切换：${getDirectionColorGuideText()}。`;
     if (snapshot.eaten === 0) return '先通过转向切到目标颜色，再去吃同色食物。';
     if (snapshot.eaten < 3) return '色序固定可预判，提前规划下一次转向。';
     if (snapshot.eliminated === 0) return '让最后 3 节尾巴同色，就能完成消除。';
+  }
+  if (snapshot.mode === 'timed-color') {
+    if (snapshot.status === 'ready') return `蛇头每 5 秒自动变色：${getDirectionColorGuideText()}。`;
+    if (snapshot.eaten === 0) return '先盯住当前颜色，等快变色时提前转向找下一色。';
+    if (snapshot.eaten < 3) return '变色节奏固定，看到下次颜色后提前预留路线。';
+    if (snapshot.eliminated === 0) return '吃对颜色也会长尾巴，尾巴三连同色可以消除。';
   }
   if (snapshot.status === 'upgrade') return '完成两次三消后，可以选一个本局强化。';
   if (snapshot.eaten === 0) return '吃到色块后，蛇尾会长出对应颜色。';
