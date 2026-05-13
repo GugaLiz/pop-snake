@@ -17,8 +17,9 @@ import {
   markTutorialCompleted,
   saveSettings,
 } from '../storage/localStorage';
+import type { PlayerSettings } from '../storage/localStorage';
 
-const DESKTOP_STAGE = { width: 1180, height: 900 } as const;
+const DESKTOP_STAGE = { width: 1320, height: 900 } as const;
 
 const initialSnapshot: GameSnapshot = {
   mode: 'brawl',
@@ -55,19 +56,39 @@ const MODE_LABELS: Record<GameModeId, { tone: Tone; tag: string }> = {
   timed: { tone: 'rare', tag: '快节奏' },
   steps: { tone: 'common', tag: '规划' },
   precision: { tone: 'epic', tag: '挑战' },
-  puzzle: { tone: 'epic', tag: '解谜' },
-  rush: { tone: 'rare', tag: '开路' },
-  'direction-color': { tone: 'legendary', tag: '染色' },
-  'timed-color': { tone: 'legendary', tag: '变色' },
-  brawl: { tone: 'mythic', tag: '乱斗' },
+  puzzle: { tone: 'epic', tag: '同向' },
+  rush: { tone: 'rare', tag: '破壁' },
+  'direction-color': { tone: 'legendary', tag: '挑战' },
+  'timed-color': { tone: 'legendary', tag: '耐玩' },
+  brawl: { tone: 'mythic', tag: '终极' },
 };
 
 const FEATURED_MODE: GameModeId = 'brawl';
-const MODE_GROUPS: Array<{ id: string; title: string; modes: GameModeId[] }> = [
-  { id: 'tail', title: '蛇尾与日常', modes: ['sprint', 'daily'] },
-  { id: 'route', title: '解谜与破阵', modes: ['puzzle', 'rush'] },
-  { id: 'color', title: '颜色规则', modes: ['direction-color', 'timed-color'] },
-  { id: 'classic', title: '经典规则', modes: ['standard', 'endless', 'timed', 'steps', 'precision'] },
+const POP_BRANCH_MODES: GameModeId[] = ['standard', 'endless', 'timed', 'steps', 'precision'];
+const COLOR_BRANCH_MODES: GameModeId[] = ['timed-color', 'direction-color'];
+const CLASSIC_BRANCH_MODES: GameModeId[] = [...POP_BRANCH_MODES, 'puzzle', 'rush', ...COLOR_BRANCH_MODES];
+const MODE_ENTRY_LABELS: Partial<Record<GameModeId, string>> = {
+  brawl: '终极乱斗',
+  puzzle: '同向蛇',
+  rush: '破壁蛇',
+  'timed-color': '5s变色',
+  'direction-color': '转向变色',
+};
+type ModeTreeBranch =
+  | { id: string; title: string; modes: GameModeId[] }
+  | { id: string; title: string; mode: GameModeId };
+
+const MODE_TREE: Array<{ id: string; title: string; branches: ModeTreeBranch[] }> = [
+  {
+    id: 'classic',
+    title: '经典玩法',
+    branches: [
+      { id: 'pop', title: '消消蛇', modes: POP_BRANCH_MODES },
+      { id: 'direction', title: '同向蛇', mode: 'puzzle' as GameModeId },
+      { id: 'wall', title: '破壁蛇', mode: 'rush' as GameModeId },
+      { id: 'color', title: '变色蛇', modes: COLOR_BRANCH_MODES },
+    ],
+  },
 ];
 
 const COLOR_MODES: GameModeId[] = ['direction-color', 'timed-color'];
@@ -122,9 +143,13 @@ export function App() {
   }, [result]);
 
   useEffect(() => {
-    const activeGroup = MODE_GROUPS.find((group) => group.modes.includes(selectedMode));
-    if (!activeGroup) return;
-    setExpandedModeGroups((current) => current[activeGroup.id] ? current : { ...current, [activeGroup.id]: true });
+    if (!CLASSIC_BRANCH_MODES.includes(selectedMode)) return;
+    setExpandedModeGroups((current) => {
+      const next: Record<string, boolean> = { ...current, classic: true };
+      if (POP_BRANCH_MODES.includes(selectedMode)) next.pop = true;
+      if (COLOR_BRANCH_MODES.includes(selectedMode)) next.color = true;
+      return next;
+    });
   }, [selectedMode]);
 
   useEffect(() => {
@@ -206,6 +231,12 @@ export function App() {
     saveSettings(next);
   };
 
+  const toggleTheme = () => {
+    const next: PlayerSettings = { ...settings, theme: settings.theme === 'default' ? 'graffiti' : 'default' };
+    setSettings(next);
+    saveSettings(next);
+  };
+
   const tutorialText = getTutorialText(snapshot, tutorialDone);
   const modeGuide = getModeGuide(selectedMode);
   const resumePercent = Math.max(0, Math.min(100, Math.round((snapshot.resumeCountdownProgress ?? 0) * 100)));
@@ -215,6 +246,7 @@ export function App() {
   const isSelectedColorMode = COLOR_MODES.includes(selectedMode);
   const isActiveColorMode = isSelectedColorMode || snapshot.directionColorCurrentLabel !== undefined;
   const isActiveRushMode = selectedMode === 'rush' || snapshot.rushSkillReady !== undefined;
+  const controlsHint = isActiveRushMode ? 'WASD/↑←↓→ 移动，空格键发动技能' : 'WASD/↑←↓→ 移动';
   const comboActive = selectedMode !== 'puzzle' && snapshot.combo > 1;
   const currentModeSummary = getCurrentModeSummary(selectedMode, snapshot, {
     puzzleProgress,
@@ -359,15 +391,13 @@ export function App() {
   }, [buttonNavEnabled, result, showGuide, snapshot.status]);
 
   return (
-    <main className="stage-viewport">
+    <main className={`stage-viewport theme-${settings.theme}`}>
       <div className="shell stage" style={{ '--stage-scale': stageScale } as CSSProperties}>
         <section className="hero-card">
           <div>
-            <p className="eyebrow">V3 开发中</p>
-            <h1>消消蛇</h1>
-            <p className="subtitle">主玩冲刺与每日已可体验，解谜和开路分支都已接入，模式入口已按 V3 收敛。</p>
+            <h1>贪吃蛇·<span className="title-gradient">无限变奏</span></h1>
           </div>
-          <div className="sticker-preview">
+          <div className="sticker-preview is-hidden">
             <strong className="sticker-title">每日贴纸 {stickers.length}/{stickerDefinitions.length}</strong>
             <span className="sticker-help">完成不同每日规则可解锁</span>
             <div className="sticker-row">
@@ -385,6 +415,7 @@ export function App() {
           <div className="hero-actions">
             <button className="pill-button" data-nav-button="true" onClick={toggleSfx} type="button">音效：{settings.sfxEnabled ? '开' : '关'}</button>
             <button className="pill-button" data-nav-button="true" onClick={toggleScreenShake} type="button">震屏：{settings.screenShakeEnabled ? '开' : '关'}</button>
+            <button className="pill-button" data-nav-button="true" onClick={toggleTheme} type="button">主题：{settings.theme === 'default' ? '默认' : '涂鸦'}</button>
             <button className="pill-button" data-nav-button="true" onClick={toggleVirtualPad} type="button">{settings.virtualPadEnabled ? '隐藏方向键' : '显示方向键'}</button>
           </div>
         </section>
@@ -397,27 +428,46 @@ export function App() {
                 {renderModeButton(FEATURED_MODE, selectedMode, changeMode)}
               </div>
             </div>
-            {MODE_GROUPS.map((group) => {
+            {MODE_TREE.map((group) => {
               const expanded = Boolean(expandedModeGroups[group.id]);
-              const hasActiveMode = group.modes.includes(selectedMode);
+              const hasActiveMode = CLASSIC_BRANCH_MODES.includes(selectedMode);
               return (
                 <div className="mode-section" key={group.id}>
-                  <button className={`more-modes-toggle${expanded ? ' active' : ''}${hasActiveMode ? ' has-active' : ''}`} data-nav-button="true" onClick={() => toggleModeGroup(group.id)} type="button">
+                  <button className={`more-modes-toggle entry-toggle${expanded ? ' active' : ''}${hasActiveMode ? ' has-active' : ''}`} data-nav-button="true" onClick={() => toggleModeGroup(group.id)} type="button">
                     <span className="more-modes-label">{group.title}</span>
                     <strong className="more-modes-state">{expanded ? '收起' : '展开'}</strong>
                   </button>
                   {expanded && (
-                    <div className="mode-select grouped-mode-select">
-                      {group.modes.map((modeId) => renderModeButton(modeId, selectedMode, changeMode))}
+                    <div className="branch-select">
+                      {group.branches.map((branch) => {
+                        if ('mode' in branch) {
+                          return renderBranchModeButton(branch, selectedMode, changeMode);
+                        }
+
+                        const branchExpanded = Boolean(expandedModeGroups[branch.id]);
+                        return (
+                          <div className="mode-branch" key={branch.id}>
+                            <button className={`more-modes-toggle nested${branchExpanded ? ' active' : ''}`} data-nav-button="true" onClick={() => toggleModeGroup(branch.id)} type="button">
+                              <span className="more-modes-label">{branch.title}</span>
+                              <strong className="more-modes-state">{branchExpanded ? '收起' : '展开'}</strong>
+                            </button>
+                            {branchExpanded && (
+                              <div className="mode-select grouped-mode-select">
+                                {branch.modes.map((modeId) => renderModeButton(modeId, selectedMode, changeMode))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               );
             })}
-            <div className={`current-mode-card rarity-${MODE_LABELS[selectedMode].tone}${result ? ' condensed' : ''}`}>
+            <div className={`current-mode-card is-hidden rarity-${MODE_LABELS[selectedMode].tone}${result ? ' condensed' : ''}`}>
               <div className="current-mode-head">
                 <span className={`mode-tag rarity-${MODE_LABELS[selectedMode].tone}`}>{MODE_LABELS[selectedMode].tag}</span>
-                <strong>{GAME_MODES[selectedMode].name}</strong>
+                <strong>{getModeDisplayName(selectedMode)}</strong>
               </div>
               <p className="current-mode-copy">{currentModeSummary.copy}</p>
               <div className="current-mode-pills">
@@ -454,15 +504,17 @@ export function App() {
                 <button data-nav-button="true" onClick={() => setShowGuide(true)} type="button">教程</button>
               </div>
             </div>
-            <div className={`status-strip${statusMessages.length > 0 ? ' active' : ''}${snapshot.comboRewardText ? ' combo-banner' : ''}`} aria-hidden={statusMessages.length === 0}>
-              {statusMessages.length > 0 ? statusMessages.map((message) => <span key={message}>{message}</span>) : <span>状态提示区</span>}
+            <div className={`status-strip active${snapshot.comboRewardText ? ' combo-banner' : ''}`}>
+              <span className="controls-hint">{controlsHint}</span>
+              {statusMessages.length > 0 && <span className="status-divider" aria-hidden="true" />}
+              {statusMessages.map((message) => <span className="status-message" key={message}>{message}</span>)}
             </div>
             <div className="game-wrap" style={{ '--board-cols': GAME_CONFIG.boardColumns, '--board-rows': GAME_CONFIG.boardRows } as CSSProperties}>
               <GameCanvas mode={selectedMode} onSnapshot={handleSnapshot} onGameOver={handleGameOver} onEvent={handleEvent} screenShakeEnabled={settings.screenShakeEnabled} command={command} inputLocked={result !== null || showGuide} />
               {tutorialText && <div className="tutorial-banner">{tutorialText}</div>}
               {snapshot.status === 'ready' && !result && (
                 <div className="overlay start-card">
-                  <p>{GAME_MODES[selectedMode].name}</p>
+                  <p>{getModeDisplayName(selectedMode)}</p>
                   <strong>{selectedMode === 'puzzle' && puzzleProgress ? `第 ${puzzleProgress.level} 关` : selectedMode === 'rush' ? '射击' : '开始'}</strong>
                   <span>
                     {selectedMode === 'puzzle' && snapshot.dailyChallengeText
@@ -542,7 +594,7 @@ export function App() {
               )}
               {showGuide && (
                 <div className="overlay guide-card">
-                  <p>{GAME_MODES[selectedMode].name}</p>
+                  <p>{getModeDisplayName(selectedMode)}</p>
                   <strong>玩法引导</strong>
                   {renderGuideDemo(modeGuide.demo)}
                   <div className="guide-feature">
@@ -679,12 +731,32 @@ function renderModeButton(
   changeMode: (mode: GameModeId) => void,
 ) {
   const mode = GAME_MODES[modeId];
+  const hideTag = mode.id === 'brawl';
   return (
-    <button className={`mode-button rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
-      <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>
-      <strong>{mode.name}</strong>
+    <button className={`mode-button${hideTag ? ' no-tag' : ''} rarity-${MODE_LABELS[mode.id].tone}${mode.id === selectedMode ? ' active' : ''}`} data-nav-button="true" key={mode.id} onClick={() => changeMode(mode.id)} type="button">
+      {!hideTag && <span className={`mode-tag rarity-${MODE_LABELS[mode.id].tone}`}>{MODE_LABELS[mode.id].tag}</span>}
+      <strong>{getModeDisplayName(mode.id)}</strong>
     </button>
   );
+}
+
+function renderBranchModeButton(
+  branch: { id: string; title: string; mode: GameModeId },
+  selectedMode: GameModeId,
+  changeMode: (mode: GameModeId) => void,
+) {
+  const mode = GAME_MODES[branch.mode];
+  return (
+    <button className={`more-modes-toggle nested branch-mode-button${mode.id === selectedMode ? ' has-active' : ''}`} data-nav-button="true" key={branch.id} onClick={() => changeMode(mode.id)} type="button">
+      <span className="branch-mode-text">
+        <strong>{branch.title}</strong>
+      </span>
+    </button>
+  );
+}
+
+function getModeDisplayName(modeId: GameModeId): string {
+  return MODE_ENTRY_LABELS[modeId] ?? GAME_MODES[modeId].name;
 }
 
 function renderGuideDemo(kind: ReturnType<typeof getModeGuide>['demo']) {

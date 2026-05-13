@@ -13,7 +13,10 @@ export type PlayerSettings = {
   sfxEnabled: boolean;
   screenShakeEnabled: boolean;
   virtualPadEnabled: boolean;
+  theme: PlayerTheme;
 };
+
+export type PlayerTheme = 'default' | 'graffiti';
 
 export type DailyChallengeStatus = {
   completed: boolean;
@@ -47,6 +50,7 @@ const defaultSettings: PlayerSettings = {
   sfxEnabled: true,
   screenShakeEnabled: true,
   virtualPadEnabled: true,
+  theme: 'graffiti',
 };
 
 function normalizeSettings(input: unknown): PlayerSettings {
@@ -55,6 +59,7 @@ function normalizeSettings(input: unknown): PlayerSettings {
     sfxEnabled: typeof parsed.sfxEnabled === 'boolean' ? parsed.sfxEnabled : defaultSettings.sfxEnabled,
     screenShakeEnabled: typeof parsed.screenShakeEnabled === 'boolean' ? parsed.screenShakeEnabled : defaultSettings.screenShakeEnabled,
     virtualPadEnabled: typeof parsed.virtualPadEnabled === 'boolean' ? parsed.virtualPadEnabled : defaultSettings.virtualPadEnabled,
+    theme: parsed.theme === 'graffiti' ? 'graffiti' : defaultSettings.theme,
   };
 }
 
